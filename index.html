@@ -16,7 +16,7 @@
 <header class="top">
   <div class="brand">
     <h1>Biophony</h1>
-    <p class="sub">The living planet, listening live. <span class="dot" id="liveDot"></span><span id="liveText">connecting…</span></p>
+    <p class="sub">How balanced the planet sounds, live. <span class="dot" id="liveDot"></span><span id="liveText">connecting…</span></p>
   </div>
   <dl class="stats" aria-label="Last 24 hours across the network">
     <div><dt>Recognitions, 24 h</dt><dd id="stDet">–</dd></div>
@@ -29,18 +29,12 @@
 <main class="layout">
   <section class="map-wrap" aria-label="World map of acoustic monitors">
     <div id="map"></div>
-    <div class="chips" id="chips" role="group" aria-label="Filter by group">
-      <button class="chip on" data-c="bird" aria-pressed="true"><i style="--c:var(--bird)"></i>Birds</button>
-      <button class="chip on" data-c="bat" aria-pressed="true"><i style="--c:var(--bat)"></i>Bats</button>
-      <button class="chip on" data-c="insect" aria-pressed="true"><i style="--c:var(--insect)"></i>Insects</button>
-      <button class="chip on" data-c="amphibian" aria-pressed="true"><i style="--c:var(--amphibian)"></i>Frogs</button>
-      <button class="chip on" data-c="mammal" aria-pressed="true"><i style="--c:var(--mammal)"></i>Mammals</button>
-      <button class="chip on" data-c="whale" aria-pressed="true"><i style="--c:var(--whale)"></i>Underwater</button>
-    </div>
     <details class="layers" open>
       <summary>Layers</summary>
-      <p class="lh">Sound</p>
-      <label><input type="checkbox" id="lyStations" checked> BirdWeather stations</label>
+      <p class="lh">Ecological balance</p>
+      <label><input type="radio" name="view" value="grid" checked> Regional grid <small>median balance of the stations in each cell</small></label>
+      <label><input type="radio" name="view" value="sites"> Individual stations</label>
+      <div class="legend"><div class="bar sbi-grad"></div><div class="ends"><span>0 low</span><span>50</span><span>100 rich</span></div></div>
       <label><input type="checkbox" id="lyHydro" checked> Orcasound hydrophones</label>
       <p class="lh">From orbit · NASA</p>
       <label><input type="radio" name="sat" value="none" checked> None</label>
@@ -54,14 +48,13 @@
 
   <aside class="panel">
     <div class="tabs" role="tablist">
-      <button role="tab" class="tab on" data-t="live" aria-selected="true">Live feed</button>
+      <button role="tab" class="tab on" data-t="balance" aria-selected="true">Balance</button>
       <button role="tab" class="tab" data-t="site" aria-selected="false">Site</button>
       <button role="tab" class="tab" data-t="about" aria-selected="false">About</button>
     </div>
 
-    <div class="pane" id="pane-live">
-      <p class="pane-note">New recognitions appear as monitors report them. Tap one to hear the clip; tap the station name to open the site.</p>
-      <ol class="feed" id="feed"></ol>
+    <div class="pane" id="pane-balance">
+      <div id="bal"><p class="empty">Gathering 24 hours of recognitions from every station…</p></div>
     </div>
 
     <div class="pane" id="pane-site" hidden>
@@ -70,7 +63,7 @@
 
     <div class="pane prose" id="pane-about" hidden>
       <h2>What this is</h2>
-      <p>A live view of the planet's <em>biophony</em>: the combined sound of living things. Thousands of free, always-on acoustic monitors stream what they recognise, and satellite layers add the view from orbit, so you can compare what a place sounds like with how healthy it looks.</p>
+      <p>A live view of the planet's <em>biophony</em>: the combined sound of living things (Pijanowski et al. 2011). Thousands of free, always-on acoustic monitors report what they recognise. Rather than list every bird, Biophony turns those recognitions into a balance index for each place and adds satellite measurements, so you can see where the soundscape is rich and where it is thin.</p>
       <h3>Listening</h3>
       <ul>
         <li><strong>BirdWeather</strong>: over 10,000 stations (BirdWeather PUCs and BirdNET-Pi) running the BirdNET model. Birds, plus bats, insects, frogs and some mammals. Each recognition comes with the original audio clip.</li>
@@ -81,27 +74,54 @@
         <li><strong>EMIT</strong> (imaging spectrometer on the ISS, 285 bands, 60 m): for each site, the most recent scenes covering it, with cloud cover, a preview and the full reflectance data. EMIT only covers ±52° latitude and passes irregularly. Methane plume detections can be shown on the map.</li>
         <li><strong>MODIS NDVI</strong>: plant greenness on land. <strong>PACE OCI chlorophyll</strong>: phytoplankton in the ocean. <strong>VIIRS</strong>: true colour.</li>
       </ul>
-      <h3>The biodiversity readout</h3>
+      <h3>The balance index</h3>
+      <p>Each station gets a <strong>Soundscape Balance Index</strong> from 0 to 100, built from its last 24 hours of recognitions. The index is this project's own experimental composite; every ingredient is a published metric:</p>
       <ul>
-        <li><strong>Richness</strong>: number of species recognised in the last 24 hours.</li>
-        <li><strong>Shannon diversity (H′)</strong>: higher when there are many species and none dominates.</li>
-        <li><strong>Evenness (J′)</strong>: H′ divided by its maximum. Near 1 means detections are spread evenly; near 0 means one or two species dominate.</li>
+        <li><strong>Diversity, 50%</strong>: effective number of species, the Hill number of order 1, exp(H′) (Hill 1973; Jost 2006). Scored as a percentile against stations at a similar latitude, because diversity naturally rises toward the tropics (Hillebrand 2004).</li>
+        <li><strong>Evenness, 35%</strong>: Pielou's J′ = H′ / ln S (Pielou 1966). Low when one or two species dominate.</li>
+        <li><strong>Taxonomic breadth, 15%</strong>: whether insects, frogs, bats or mammals are heard alongside birds. Full marks at three groups.</li>
       </ul>
-      <p>These describe what one microphone heard, not the whole ecosystem. Recognitions can be wrong (BirdNET is strongest on North American and European birds), station hardware differs, and a busy feeder or a noisy road changes everything. Treat them as signals to compare over time, not as a health score.</p>
+      <p>Stations with fewer than 30 recognitions or 3 species are left out. <strong>Sample coverage</strong> (Chao &amp; Jost 2012) and <strong>Chao1</strong> estimated richness (Chao 1984, 1987) show how complete each sample is. The map grid and regions use the median of their stations.</p>
+      <h3>Site health</h3>
+      <p>Opening a station adds three more measurements and combines them with the balance index:</p>
+      <ul>
+        <li><strong>Soundscape</strong>: from the station's recent audio, the Normalized Difference Soundscape Index, NDSI (Kasten et al. 2012): biophony (2–11 kHz) against anthrophony (1–2 kHz), the band where traffic and machinery sit. Also shown: Acoustic Diversity Index (Villanueva-Rivera et al. 2011) and acoustic entropy H (Sueur et al. 2008).</li>
+        <li><strong>Vegetation</strong>: MODIS 250 m NDVI around the station and the Vegetation Condition Index, VCI (Kogan 1995): today's greenness compared with the same time of year in past years.</li>
+        <li><strong>Methane</strong>: EMIT plume detections nearby, shown as a flag rather than scored.</li>
+      </ul>
+      <h3>Read with care</h3>
+      <p>Detection counts are calls, not individuals. BirdNET makes mistakes and is strongest on North American and European birds. Clips are saved when a bird is recognised, which biases the soundscape indices upward. Acoustic indices track species diversity only moderately (Alcocer et al. 2022). Use the numbers to compare places and watch change over time, not as a verdict on a place.</p>
+      <h3>References</h3>
+      <ul class="refs">
+        <li>Alcocer I. et al. (2022) Acoustic indices as proxies for biodiversity: a meta-analysis. <em>Biological Reviews</em> 97: 2209–2236.</li>
+        <li>Chao A. (1984) Nonparametric estimation of the number of classes in a population. <em>Scand. J. Statistics</em> 11: 265–270.</li>
+        <li>Chao A. &amp; Jost L. (2012) Coverage-based rarefaction and extrapolation. <em>Ecology</em> 93: 2533–2547.</li>
+        <li>Hill M.O. (1973) Diversity and evenness: a unifying notation. <em>Ecology</em> 54: 427–432.</li>
+        <li>Hillebrand H. (2004) On the generality of the latitudinal diversity gradient. <em>Am. Naturalist</em> 163: 192–211.</li>
+        <li>Jost L. (2006) Entropy and diversity. <em>Oikos</em> 113: 363–375.</li>
+        <li>Kahl S. et al. (2021) BirdNET: a deep learning solution for avian diversity monitoring. <em>Ecological Informatics</em> 61: 101236.</li>
+        <li>Kasten E.P. et al. (2012) The remote environmental assessment laboratory's acoustic library. <em>Ecological Informatics</em> 12: 50–67.</li>
+        <li>Kogan F.N. (1995) Application of vegetation index and brightness temperature for drought detection. <em>Adv. Space Research</em> 15: 91–100.</li>
+        <li>Pielou E.C. (1966) The measurement of diversity in different types of biological collections. <em>J. Theoretical Biology</em> 13: 131–144.</li>
+        <li>Pijanowski B.C. et al. (2011) Soundscape ecology: the science of sound in the landscape. <em>BioScience</em> 61: 203–216.</li>
+        <li>Sueur J. et al. (2008) Rapid acoustic survey for biodiversity appraisal. <em>PLoS ONE</em> 3: e4065.</li>
+        <li>Villanueva-Rivera L.J. et al. (2011) A primer of acoustic analysis for landscape ecologists. <em>Landscape Ecology</em> 26: 1233–1246.</li>
+      </ul>
       <h3>Credits</h3>
-      <p class="small">Data: <a href="https://www.birdweather.com" target="_blank" rel="noopener">BirdWeather</a> &amp; <a href="https://birdnet.cornell.edu" target="_blank" rel="noopener">BirdNET</a> (K. Lisa Yang Center, Cornell Lab of Ornithology / TU Chemnitz), <a href="https://www.orcasound.net" target="_blank" rel="noopener">Orcasound</a>, NASA <a href="https://earth.jpl.nasa.gov/emit/" target="_blank" rel="noopener">EMIT</a> via <a href="https://lpdaac.usgs.gov" target="_blank" rel="noopener">LP DAAC</a> &amp; CMR, NASA <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noopener">GIBS</a>. Basemap © Esri, HERE, Garmin, OpenStreetMap contributors. Made by <a href="https://anishohmyghosh.github.io/website/" target="_blank" rel="noopener">Anish Ghosh</a>.</p>
+      <p class="small">Data: <a href="https://www.birdweather.com" target="_blank" rel="noopener">BirdWeather</a> &amp; <a href="https://birdnet.cornell.edu" target="_blank" rel="noopener">BirdNET</a> (K. Lisa Yang Center, Cornell Lab of Ornithology / TU Chemnitz), <a href="https://www.orcasound.net" target="_blank" rel="noopener">Orcasound</a>, NASA <a href="https://earth.jpl.nasa.gov/emit/" target="_blank" rel="noopener">EMIT</a> via <a href="https://lpdaac.usgs.gov" target="_blank" rel="noopener">LP DAAC</a> &amp; CMR, NASA <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noopener">GIBS</a>, MODIS via <a href="https://modis.ornl.gov" target="_blank" rel="noopener">ORNL DAAC</a>. Basemap © Esri, HERE, Garmin, OpenStreetMap contributors. Made by <a href="https://anishohmyghosh.github.io/website/" target="_blank" rel="noopener">Anish Ghosh</a>.</p>
     </div>
   </aside>
 </main>
 
 <footer class="player" id="player">
-  <button class="pbtn" id="pbtn" aria-label="Play" disabled>
+  <button class="pbtn" id="pbtn" aria-label="Play a soundscape tour of the sites in view">
     <svg id="icPlay" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>
     <svg id="icStop" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>
   </button>
+  <button class="pnext" id="pnext" aria-label="Next clip" title="Next" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l8.5 6L6 18zM16 6h2.2v12H16z" fill="currentColor"/></svg></button>
   <div class="pinfo">
-    <p class="ptitle" id="ptitle">Nothing playing</p>
-    <p class="psub" id="psub">Tap a recognition or a hydrophone to listen</p>
+    <p class="ptitle" id="ptitle">Soundscape tour</p>
+    <p class="psub" id="psub">Press play to hear the sites in view, or tap any station or hydrophone</p>
   </div>
   <div class="spec">
     <canvas id="spec"></canvas>

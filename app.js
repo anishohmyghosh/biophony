@@ -72,143 +72,326 @@ document.querySelectorAll('input[name=sat]').forEach(r => r.addEventListener('ch
   }
 }));
 
+// ---------------- ecological metrics ----------------
+// Detection counts per species over 24 h are the abundance proxy (calls, not individuals).
+const GROUPS = ['bird', 'bat', 'insect', 'amphibian', 'mammal'];
+const MIN_N = 30, MIN_S = 3;
+function diversity(list) {               // list: [{n, c}]
+  let N = 0; for (const x of list) N += x.n;
+  const S = list.length; let H = 0, D = 0, f1 = 0, f2 = 0, mask = 0;
+  for (const x of list) {
+    const p = x.n / N; if (p > 0) { H -= p * Math.log(p); D += p * p; }
+    if (x.n === 1) f1++; else if (x.n === 2) f2++;
+    mask |= 1 << Math.max(0, GROUPS.indexOf(x.c));
+  }
+  return { N, S, H, D, f1, f2, mask };
+}
+const hill1 = m => Math.exp(m.H);                          // Hill 1973, q = 1
+const hill2 = m => m.D ? 1 / m.D : 0;                      // inverse Simpson, q = 2
+const pielou = m => m.S > 1 ? m.H / Math.log(m.S) : 0;     // Pielou 1966
+const coverage = m => !m.f1 ? 1 : 1 - (m.f1 / m.N) * (((m.N - 1) * m.f1) / ((m.N - 1) * m.f1 + 2 * m.f2));   // Chao & Jost 2012
+const chao1 = m => !m.N ? 0 : m.S + ((m.N - 1) / m.N) * (m.f1 * (m.f1 - 1)) / (2 * (m.f2 + 1));                        // bias-corrected Chao1
+const nGroups = m => { let k = 0, x = m.mask; while (x) { k += x & 1; x >>= 1; } return k; };
+const eligible = m => m && m.N >= MIN_N && m.S >= MIN_S;
+
+// Latitude-band reference distributions of Hill q1, so a boreal site isn't judged against the tropics.
+let bands = new Map();
+function buildBands() {
+  bands = new Map();
+  for (const s of stations.values()) if (eligible(s.m)) {
+    const b = Math.floor(s.lat / 10);
+    if (!bands.has(b)) bands.set(b, []);
+    bands.get(b).push(hill1(s.m));
+  }
+  for (const a of bands.values()) a.sort((x, y) => x - y);
+}
+const lowerB = (a, v) => { let lo = 0, hi = a.length; while (lo < hi) { const m = (lo + hi) >> 1; a[m] < v ? lo = m + 1 : hi = m; } return lo; };
+const upperB = (a, v) => { let lo = 0, hi = a.length; while (lo < hi) { const m = (lo + hi) >> 1; a[m] <= v ? lo = m + 1 : hi = m; } return lo; };
+function latPercentile(lat, v) {
+  const b0 = Math.floor(lat / 10);
+  for (let k = 0; k <= 4; k++) {
+    let tot = 0, below = 0;
+    for (let b = b0 - k; b <= b0 + k; b++) { const a = bands.get(b); if (!a) continue; tot += a.length; below += (lowerB(a, v) + upperB(a, v)) / 2; }
+    if (tot >= 25 || k === 4) return { p: tot ? below / tot : 0.5, n: tot, span: (2 * k + 1) * 10 };
+  }
+}
+function balance(lat, m) {
+  if (!eligible(m)) return null;
+  const P = latPercentile(lat, hill1(m)), E = pielou(m), B = Math.min(1, (nGroups(m) - 1) / 2);
+  return { sbi: Math.round(100 * (0.5 * P.p + 0.35 * E + 0.15 * B)), D: P.p, E, B, ref: P };
+}
+const SBI_WORD = v => v >= 65 ? 'Rich' : v >= 50 ? 'Balanced' : v >= 35 ? 'Thin' : 'Low';
+// Diverging scale: rust (low) -> neutral grey (50) -> teal (high). Poles validated for CVD on the dark surface.
+const LO = [212, 104, 63], MID = [123, 133, 132], HI = [42, 169, 139];
+function sbiColor(v) {
+  const t = Math.max(0, Math.min(100, v)) / 100, [a, b, u] = t < 0.5 ? [LO, MID, t * 2] : [MID, HI, (t - 0.5) * 2];
+  return `rgb(${a.map((c, i) => Math.round(c + (b[i] - c) * u)).join(',')})`;
+}
+const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const quant = (a, q) => { const s = [...a].sort((x, y) => x - y); if (!s.length) return null; const i = (s.length - 1) * q, lo = Math.floor(i); return s[lo] + (s[Math.min(s.length - 1, lo + 1)] - s[lo]) * (i - lo); };
+
 // ---------------- BirdWeather stations ----------------
-const stations = new Map();          // id -> {lat, lon, marker}
-const stationLayer = L.layerGroup().addTo(map);
+const stations = new Map();          // id -> {id, lat, lon, name, continent, country, state, marker, m, bal}
+const stationLayer = L.layerGroup();
+const gridLayer = L.layerGroup().addTo(map);
+let viewMode = 'grid';
+function addStation(s) {
+  if (!s.coords) return null;
+  let st = stations.get(s.id);
+  if (!st) {
+    const m = L.circleMarker([s.coords.lat, s.coords.lon], { renderer, radius: 2.2, stroke: false, fillColor: '#4a5655', fillOpacity: 0.5 });
+    st = { id: s.id, lat: s.coords.lat, lon: s.coords.lon, marker: m, m: null, bal: null };
+    m.on('click', () => openStation(st.id, true));
+    m.bindTooltip(() => `${st.name}${st.bal ? ` · balance ${st.bal.sbi}` : ''}`, { direction: 'top', offset: [0, -4] });
+    stationLayer.addLayer(m);
+    stations.set(s.id, st);
+  }
+  st.name = s.name ?? st.name; st.continent = s.continent ?? st.continent; st.country = s.country ?? st.country; st.state = s.state ?? st.state;
+  return st;
+}
 async function loadStations() {
-  let after = null, n = 0;
+  let after = null;
   for (let page = 0; page < 8; page++) {
-    const d = await gql(`query($after:String,$p:InputDuration){ stations(first:2500, after:$after, period:$p){ pageInfo{hasNextPage endCursor} nodes{ id name coords{lat lon} } } }`, { after, p: DAY });
-    for (const s of d.stations.nodes) {
-      if (!s.coords || stations.has(s.id)) continue;
-      const m = L.circleMarker([s.coords.lat, s.coords.lon], { renderer, radius: 2.4, stroke: false, fillColor: '#e3b765', fillOpacity: 0.5 });
-      m.on('click', () => openStation(s.id));
-      m.bindTooltip(s.name, { direction: 'top', offset: [0, -4] });
-      stationLayer.addLayer(m);
-      stations.set(s.id, { lat: s.coords.lat, lon: s.coords.lon, marker: m, name: s.name });
-      n++;
-    }
+    const d = await gql(`query($after:String,$p:InputDuration){ stations(first:2500, after:$after, period:$p){ pageInfo{hasNextPage endCursor} nodes{ id name continent country state coords{lat lon} } } }`, { after, p: DAY });
+    d.stations.nodes.forEach(addStation);
     if (!d.stations.pageInfo.hasNextPage) break;
     after = d.stations.pageInfo.endCursor;
   }
-  return n;
 }
-$('lyStations').addEventListener('change', e => e.target.checked ? stationLayer.addTo(map) : map.removeLayer(stationLayer));
+
+// Metrics come from per-station species counts, fetched in geographic shards in parallel (view first).
+const MQ = `query($ne:InputLocation,$sw:InputLocation,$after:String,$p:InputDuration){ stations(first:500, after:$after, period:$p, ne:$ne, sw:$sw){ pageInfo{hasNextPage endCursor} nodes{ id name continent country state coords{lat lon} topSpecies(limit:100, period:$p){ count species{ classification } } } } }`;
+const CACHE_KEY = 'biophony-metrics-v1', CACHE_MS = 40 * 60e3;
+let analysed = 0, analysing = false, lastRun = 0;
+function setMetrics(st, top) {
+  st.m = diversity(top.map(x => ({ n: x.count, c: normCls(x.species?.classification) })));
+}
+function shards() {
+  const out = [], lats = [[-90, 0], [0, 30], [30, 42], [42, 52], [52, 90]];
+  for (let lon = -180; lon < 180; lon += 30) for (const [s, n] of lats) out.push({ sw: { lat: s, lon }, ne: { lat: n, lon: lon + 30 } });
+  const c = map.getCenter(), lonC = ((c.lng + 540) % 360) - 180;
+  const dist = x => Math.hypot((x.sw.lat + x.ne.lat) / 2 - c.lat, Math.min(Math.abs((x.sw.lon + 15) - lonC), 360 - Math.abs((x.sw.lon + 15) - lonC)));
+  return out.sort((a, b) => dist(a) - dist(b));
+}
+async function runShard(sh) {
+  let after = null;
+  for (let page = 0; page < 20; page++) {
+    const d = await gql(MQ, { ne: sh.ne, sw: sh.sw, after, p: DAY });
+    for (const n of d.stations.nodes) { const st = addStation(n); if (!st) continue; if (!st.m) analysed++; setMetrics(st, n.topSpecies || []); }
+    scheduleRefresh();
+    if (!d.stations.pageInfo.hasNextPage) break;
+    after = d.stations.pageInfo.endCursor;
+  }
+}
+async function analyseAll() {
+  if (analysing) return;
+  analysing = true; lastRun = Date.now();
+  const queue = shards();
+  const worker = async () => { while (queue.length) { const sh = queue.shift(); await runShard(sh).catch(() => runShard(sh).catch(() => {})); } };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  analysing = false;
+  saveCache(); scheduleRefresh();
+}
+function saveCache() {
+  try {
+    const d = {};
+    for (const s of stations.values()) if (s.m) { const m = s.m; d[s.id] = [s.lat, s.lon, m.N, m.S, +m.H.toFixed(4), +m.D.toFixed(5), m.f1, m.f2, m.mask, s.name, s.continent, s.country, s.state]; }
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ t: lastRun, d }));
+  } catch { }
+}
+function loadCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+    if (!c || Date.now() - c.t > CACHE_MS) return false;
+    for (const [id, a] of Object.entries(c.d)) {
+      const st = addStation({ id, name: a[9], continent: a[10], country: a[11], state: a[12], coords: { lat: a[0], lon: a[1] } });
+      st.m = { N: a[2], S: a[3], H: a[4], D: a[5], f1: a[6], f2: a[7], mask: a[8] };
+    }
+    analysed = Object.keys(c.d).length; lastRun = c.t;
+    return true;
+  } catch { return false; }
+}
+
+// Rescore + redraw, throttled while data streams in.
+let refreshTimer = null;
+function scheduleRefresh() { if (!refreshTimer) refreshTimer = setTimeout(() => { refreshTimer = null; rescore(); drawGrid(); renderBalance(); }, 900); }
+function rescore() {
+  buildBands();
+  for (const s of stations.values()) {
+    s.bal = balance(s.lat, s.m);
+    s.marker.setStyle(s.bal ? { fillColor: sbiColor(s.bal.sbi), fillOpacity: 0.9, radius: 3.4 } : { fillColor: '#4a5655', fillOpacity: 0.45, radius: 2.2 });
+  }
+}
+const cellSize = z => z < 3.5 ? 5 : z < 5 ? 2 : z < 6.5 ? 1 : z < 8 ? 0.5 : 0.25;
+function drawGrid() {
+  gridLayer.clearLayers();
+  if (viewMode !== 'grid') return;
+  const cs = cellSize(map.getZoom()), b = map.getBounds().pad(0.3), cells = new Map();
+  for (const s of stations.values()) {
+    if (!s.bal || !b.contains([s.lat, s.lon])) continue;
+    const k = Math.floor(s.lat / cs) + ',' + Math.floor(s.lon / cs);
+    if (!cells.has(k)) cells.set(k, []);
+    cells.get(k).push(s.bal.sbi);
+  }
+  for (const [k, v] of cells) {
+    const [i, j] = k.split(',').map(Number), med = Math.round(median(v));
+    const r = L.rectangle([[i * cs, j * cs], [(i + 1) * cs, (j + 1) * cs]], { renderer, weight: 1, color: '#0b1314', opacity: 0.9, fillColor: sbiColor(med), fillOpacity: Math.min(0.85, 0.4 + 0.08 * v.length) });
+    r.bindTooltip(`Balance ${med} · ${SBI_WORD(med).toLowerCase()} · ${v.length} station${v.length > 1 ? 's' : ''}`, { sticky: true });
+    r.on('click', () => map.flyToBounds(r.getBounds().pad(0.6), { duration: 0.8 }));
+    gridLayer.addLayer(r);
+  }
+}
+function setView(v) {
+  viewMode = v;
+  if (v === 'grid') { map.removeLayer(stationLayer); gridLayer.addTo(map); }
+  else { gridLayer.clearLayers(); stationLayer.addTo(map); }
+  drawGrid();
+}
+document.querySelectorAll('input[name=view]').forEach(r => r.addEventListener('change', () => setView(r.value)));
+map.on('moveend', () => { drawGrid(); renderBalance(); });
+
+// ---------------- balance pane ----------------
+const balEl = $('bal');
+function meter(v, lo, hi) {
+  return h('div', { class: 'meter', role: 'img', 'aria-label': `Balance ${v} of 100${lo != null ? `, middle half of stations ${Math.round(lo)} to ${Math.round(hi)}` : ''}` },
+    h('div', { class: 'meter-track sbi-grad' }),
+    lo != null ? h('div', { class: 'meter-iqr', style: `left:${lo}%;width:${Math.max(1, hi - lo)}%` }) : null,
+    h('div', { class: 'meter-mark', style: `left:${v}%` }),
+  );
+}
+const meterScale = () => h('div', { class: 'meter-scale' }, h('span', {}, '0 · low'), h('span', {}, '50'), h('span', {}, 'rich · 100'));
+function histogram(vals) {
+  const bins = Array(10).fill(0); vals.forEach(v => bins[Math.min(9, Math.floor(v / 10))]++);
+  const mx = Math.max(...bins, 1), W = 300, H = 74, bw = W / 10;
+  const NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H + 14}`); svg.setAttribute('class', 'hist'); svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Distribution of station balance scores: ' + bins.map((n, i) => `${i * 10}–${i * 10 + 10}: ${n}`).join(', '));
+  const tip = h('div', { class: 'hist-tip', hidden: true });
+  bins.forEach((n, i) => {
+    const bh = Math.max(n ? 2 : 0, (n / mx) * (H - 4)), x = i * bw + 1, y = H - bh;
+    const r = document.createElementNS(NS, 'path');
+    const rr = Math.min(3, bh / 2), w = bw - 2;
+    r.setAttribute('d', bh ? `M${x},${H} V${y + rr} Q${x},${y} ${x + rr},${y} H${x + w - rr} Q${x + w},${y} ${x + w},${y + rr} V${H} Z` : '');
+    r.setAttribute('fill', sbiColor(i * 10 + 5));
+    const hit = document.createElementNS(NS, 'rect');
+    Object.entries({ x: i * bw, y: 0, width: bw, height: H, fill: 'transparent' }).forEach(([k, v]) => hit.setAttribute(k, v));
+    hit.addEventListener('mouseenter', () => { tip.hidden = false; tip.textContent = `${n} station${n === 1 ? '' : 's'} scoring ${i * 10}–${i * 10 + 10}`; tip.style.left = `${((i + 0.5) / 10) * 100}%`; r.setAttribute('opacity', '0.75'); });
+    hit.addEventListener('mouseleave', () => { tip.hidden = true; r.removeAttribute('opacity'); });
+    svg.append(r, hit);
+  });
+  const base = document.createElementNS(NS, 'line');
+  Object.entries({ x1: 0, x2: W, y1: H + 0.5, y2: H + 0.5, stroke: '#2b4243' }).forEach(([k, v]) => base.setAttribute(k, v));
+  svg.append(base);
+  [0, 50, 100].forEach(v => { const t = document.createElementNS(NS, 'text'); t.setAttribute('x', (v / 100) * W); t.setAttribute('y', H + 12); t.setAttribute('text-anchor', v === 0 ? 'start' : v === 100 ? 'end' : 'middle'); t.textContent = v; svg.append(t); });
+  return h('div', { class: 'hist-wrap' }, svg, tip);
+}
+function regionKey(inView) {
+  const conts = new Set(inView.map(s => s.continent || 'Other'));
+  if (conts.size > 1) return [s => s.continent || 'Other', 'continent'];
+  const ctry = new Set(inView.map(s => s.country || 'Other'));
+  if (ctry.size > 1) return [s => s.country || 'Other', 'country'];
+  return [s => s.state || s.country || 'Other', 'region'];
+}
+let balRaf = 0;
+function renderBalance() {
+  cancelAnimationFrame(balRaf);
+  balRaf = requestAnimationFrame(() => {
+    const b = map.getBounds();
+    const all = [...stations.values()].filter(s => s.bal);
+    const inView = all.filter(s => b.contains([s.lat, s.lon]));
+    const total = +($('stSta').dataset.n || stations.size);
+    const prog = analysing ? h('div', { class: 'prog' }, h('div', { class: 'prog-bar', style: `width:${Math.min(100, (analysed / Math.max(total, 1)) * 100)}%` }), h('span', {}, `Analysing stations… ${fmt(analysed)} of ~${fmt(total)}`)) : null;
+    if (!inView.length) {
+      balEl.replaceChildren(prog || '', h('p', { class: 'empty' }, all.length ? 'No stations with enough data in this view. Zoom out or pan to a monitored area.' : 'Gathering 24 hours of recognitions from every station…'));
+      return;
+    }
+    const v = inView.map(s => s.bal.sbi), med = Math.round(median(v)), q1 = quant(v, 0.25), q3 = quant(v, 0.75);
+    const netMed = Math.round(median(all.map(s => s.bal.sbi)));
+    const diff = med - netMed;
+    const comp = (label, val, hint) => h('div', { class: 'metric', title: hint }, h('b', {}, val), h('span', {}, label));
+    const [key, level] = regionKey(inView);
+    const groups = new Map(); for (const s of inView) { const k = key(s); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); }
+    const rows = [...groups.entries()].filter(([, a]) => a.length >= 2).map(([k, a]) => { const sv = a.map(s => s.bal.sbi); return { k, a, n: a.length, med: median(sv), lo: quant(sv, 0.25), hi: quant(sv, 0.75) }; }).sort((x, y) => y.med - x.med).slice(0, 14);
+    const lowSites = [...inView].sort((x, y) => x.bal.sbi - y.bal.sbi).slice(0, 3), topSites = [...inView].sort((x, y) => y.bal.sbi - x.bal.sbi).slice(0, 3);
+    const siteBtn = s => h('button', { class: 'site-chip', onclick: () => openStation(s.id, true) }, h('i', { style: `background:${sbiColor(s.bal.sbi)}` }), h('span', {}, s.name), h('b', {}, s.bal.sbi));
+
+    balEl.replaceChildren(
+      prog || '',
+      h('div', { class: 'hero' },
+        h('p', { class: 'kicker' }, 'Soundscape balance · stations in view'),
+        h('div', { class: 'hero-row' }, h('span', { class: 'hero-n' }, med), h('div', {}, h('p', { class: 'hero-w' }, SBI_WORD(med)),
+          h('p', { class: 'hero-s' }, `${fmt(inView.length)} station${inView.length > 1 ? 's' : ''} · ${diff === 0 ? 'level with' : `${Math.abs(diff)} ${diff > 0 ? 'above' : 'below'}`} the network median (${netMed})`))),
+        meter(med, q1, q3), meterScale(),
+        h('p', { class: 'hint' }, 'The marker is the median; the shaded band covers the middle half of stations.')),
+      h('div', { class: 'sec' }, h('h3', {}, 'Distribution', h('small', {}, 'stations by balance score')), histogram(v)),
+      h('div', { class: 'metrics m4' },
+        comp('effective species', median(inView.map(s => hill1(s.m))).toFixed(1), 'Median Hill number q=1, exp(H′): the number of equally common species that would give the same diversity'),
+        comp('evenness J′', median(inView.map(s => pielou(s.m))).toFixed(2), 'Median Pielou evenness'),
+        comp('multi-taxa sites', Math.round(100 * inView.filter(s => nGroups(s.m) > 1).length / inView.length) + '%', 'Share of stations also hearing insects, frogs, bats or mammals'),
+        comp('sample coverage', Math.round(100 * median(inView.map(s => coverage(s.m)))) + '%', 'Median Good–Turing sample coverage (Chao & Jost 2012): how complete each 24 h sample is')),
+      rows.length ? h('div', { class: 'sec' }, h('h3', {}, `By ${level}`, h('small', {}, 'median and middle half')),
+        h('ul', { class: 'regions' }, rows.map(r => h('li', {}, h('button', { onclick: () => map.flyToBounds(L.latLngBounds(r.a.map(s => [s.lat, s.lon])).pad(0.15), { duration: 1 }) },
+          h('span', { class: 'r-name' }, r.k, h('small', {}, ` ${r.n}`)),
+          h('span', { class: 'r-plot' }, h('i', { class: 'r-iqr', style: `left:${r.lo}%;width:${Math.max(1, r.hi - r.lo)}%` }), h('i', { class: 'r-dot', style: `left:${r.med}%;background:${sbiColor(r.med)}` })),
+          h('b', {}, Math.round(r.med))))))) : null,
+      h('div', { class: 'sec two' },
+        h('div', {}, h('h3', {}, 'Richest here'), ...topSites.map(siteBtn)),
+        h('div', {}, h('h3', {}, 'Thinnest here'), ...lowSites.map(siteBtn))),
+      h('p', { class: 'note', style: 'margin-top:16px' }, 'Each station\'s score blends diversity (Hill q1, compared with stations at similar latitude), evenness (Pielou J′) and taxonomic breadth over the last 24 hours. Open a station for its full site health, including soundscape noise and vegetation from NASA MODIS. Methods and references are in About.'),
+    );
+  });
+}
 
 // ---------------- Orcasound hydrophones ----------------
-const hydros = new Map();            // feed id -> {attrs, marker}
+const hydros = new Map();            // feed id -> {attrs, marker, live}
 const hydroLayer = L.layerGroup().addTo(map);
+const hydroBase = a => `https://s3-${a.bucket_region || 'us-west-2'}.amazonaws.com/${a.bucket}/${a.node_name}`;
+async function hydroStatus(hy) {
+  try {
+    const ts = (await (await fetch(`${hydroBase(hy.a)}/latest.txt`, { cache: 'no-store' })).text()).trim();
+    const url = `${hydroBase(hy.a)}/hls/${ts}/live.m3u8`;
+    const txt = await (await fetch(url, { cache: 'no-store' })).text();
+    const last = [...txt.matchAll(/PROGRAM-DATE-TIME:([^\s]+)/g)].pop()?.[1];
+    hy.url = url; hy.last = last; hy.live = !!last && Date.now() - new Date(last) < 10 * 60e3;
+  } catch { hy.live = false; }
+  hy.marker.getElement()?.querySelector('.hydro-ic')?.classList.toggle('off', !hy.live);
+  return hy.live;
+}
 async function loadHydros() {
   const d = await getJSON(`${ORCA}/feeds`);
   for (const f of d.data) {
     const a = f.attributes;
     if (!a.visible || !a.lat_lng) continue;
     const m = L.marker([a.lat_lng.lat, a.lat_lng.lng], { icon: L.divIcon({ className: '', html: '<div class="hydro-ic"></div>', iconSize: [0, 0] }), keyboard: true, title: a.name });
-    m.on('click', () => openHydro(f.id));
-    m.bindTooltip(`${a.name} · hydrophone`, { direction: 'top', offset: [0, -8] });
+    const hy = { id: f.id, a, marker: m, live: null };
+    m.on('click', () => { openHydro(f.id); playHydro(f.id); });
+    m.bindTooltip(() => `${a.name} · hydrophone${hy.live === false ? ' · offline' : hy.live ? ' · live' : ''}`, { direction: 'top', offset: [0, -8] });
     hydroLayer.addLayer(m);
-    hydros.set(f.id, { id: f.id, a, marker: m });
+    hydros.set(f.id, hy);
   }
   $('stHyd').textContent = hydros.size;
+  Promise.all([...hydros.values()].map(hydroStatus)).then(r => { $('stHyd').textContent = `${r.filter(Boolean).length}/${r.length}`; $('stHyd').title = 'live / total'; });
 }
 $('lyHydro').addEventListener('change', e => e.target.checked ? hydroLayer.addTo(map) : map.removeLayer(hydroLayer));
 
-function pulse(lat, lon, cls) {
+function pulse(lat, lon, col) {
   if (!map.getBounds().pad(0.2).contains([lat, lon])) return;
-  const p = L.marker([lat, lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: '', html: `<div class="pulse" style="--c:${COLORS[cls] || COLORS.bird}"></div>`, iconSize: [0, 0] }) }).addTo(map);
+  const p = L.marker([lat, lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: '', html: `<div class="pulse" style="--c:${col}"></div>`, iconSize: [0, 0] }) }).addTo(map);
   setTimeout(() => map.removeLayer(p), 2500);
 }
 
-// ---------------- filters ----------------
-const active = new Set(Object.keys(CLS));
-document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
-  const k = c.dataset.c, on = !active.has(k);
-  on ? active.add(k) : active.delete(k);
-  c.classList.toggle('on', on); c.setAttribute('aria-pressed', on);
-  document.querySelectorAll('#feed li').forEach(li => { li.hidden = !active.has(li.dataset.c); });
-}));
-
-// ---------------- live feed ----------------
-const feedEl = $('feed'), seen = new Set(), MAX_FEED = 90;
-const DET_Q = `query($c:[String!],$n:Int){ detections(first:$n, classifications:$c, confidenceGte:0.7, validSoundscape:true){ nodes{
-  id timestamp confidence species{ id commonName scientificName thumbnailUrl classification }
-  station{ id name country coords{lat lon} } soundscape{ url startTime endTime } } } }`;
-
-function feedItem(d) {
-  const cls = d.cls;
-  const li = h('li', { 'data-c': cls, tabindex: 0, title: d.audio ? 'Play this recognition' : 'Listen to this hydrophone live' },
-    d.img ? h('img', { class: 'thumb', src: d.img, alt: '', loading: 'lazy' }) : h('div', { class: 'thumb' }, EMOJI[cls]),
-    h('div', {},
-      h('div', { class: 'f-name' }, d.name, d.sci ? h('em', {}, d.sci) : null),
-      h('div', { class: 'f-where' }, h('button', { onclick: e => { e.stopPropagation(); d.open(); } }, d.where), d.country ? ` · ${d.country}` : '')),
-    h('div', { class: 'f-meta' }, h('span', { class: 'tag', style: `--c:${cssVar(cls)}` }, CLS[cls] || 'Sound'), h('br'), d.conf != null ? `${Math.round(d.conf * 100)}% · ` : '', h('time', { 'data-t': d.t }, ago(d.t))));
-  li.hidden = !active.has(cls);
-  const go = () => { d.play(); markPlaying(li); };
-  li.addEventListener('click', go);
-  li.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
-  return li;
+// Faint live pulses: the network is listening, without listing every bird.
+const seen = new Set();
+async function pollPulses() {
+  const d = await gql(`{ detections(first:14, confidenceGte:0.7){ nodes{ id station{ id coords{lat lon} } } } }`);
+  const fresh = d.detections.nodes.filter(n => !seen.has(n.id) && n.station?.coords);
+  fresh.forEach((n, i) => { seen.add(n.id); const st = stations.get(n.station.id); setTimeout(() => pulse(n.station.coords.lat, n.station.coords.lon, st?.bal ? sbiColor(st.bal.sbi) : '#cfd8d6'), i * 500); });
 }
-function markPlaying(li) { feedEl.querySelectorAll('.playing').forEach(x => x.classList.remove('playing')); li?.classList.add('playing'); }
-function pushFeed(items, stagger) {
-  items.sort((a, b) => new Date(a.t) - new Date(b.t));
-  items.forEach((d, i) => {
-    const add = () => {
-      feedEl.prepend(feedItem(d));
-      while (feedEl.children.length > MAX_FEED) feedEl.lastElementChild.remove();
-      if (d.lat != null) pulse(d.lat, d.lon, d.cls);
-    };
-    stagger ? setTimeout(add, i * (stagger / items.length)) : add();
-  });
-}
-function bwToItem(n) {
-  const cls = normCls(n.species?.classification);
-  const st = n.station;
-  return {
-    id: 'bw' + n.id, cls, t: n.timestamp, name: n.species?.commonName || 'Unknown', sci: n.species?.scientificName,
-    img: n.species?.thumbnailUrl, where: st?.name || 'Station', country: st?.country, conf: n.confidence,
-    lat: st?.coords?.lat, lon: st?.coords?.lon, audio: n.soundscape?.url,
-    open: () => openStation(st.id),
-    play: () => playClip(n.soundscape, `${n.species?.commonName} · ${st?.name || ''}`, `${CLS[cls] || 'Sound'} recognised by BirdNET, ${Math.round(n.confidence * 100)}% confidence · ${new Date(n.timestamp).toLocaleString()}`),
-  };
-}
-async function pollBW(first = 14, stagger = 0) {
-  const d = await gql(DET_Q, { c: null, n: first });   // unfiltered is fastest; filtering happens client-side
-  const fresh = d.detections.nodes.filter(n => !seen.has('bw' + n.id));
-  fresh.forEach(n => seen.add('bw' + n.id));
-  pushFeed(fresh.map(bwToItem), stagger);
-}
-// Rarer groups get their own small query so birds don't drown them out.
-async function pollRare() {
-  const c = ['bat', 'insect', 'amphibian', 'mammal'].filter(k => active.has(k));
-  if (!c.length) return;
-  const d = await gql(DET_Q, { c, n: 6 });
-  const fresh = d.detections.nodes.filter(n => !seen.has('bw' + n.id));
-  fresh.forEach(n => seen.add('bw' + n.id));
-  pushFeed(fresh.map(bwToItem), 4000);
-}
-const ORCA_LABEL = { whale: 'Whale call', vessel: 'Vessel noise', other: 'Other sound' };
-async function pollOrca(n = 8) {
-  const d = await getJSON(`${ORCA}/detections?page%5Blimit%5D=${n}&sort=-timestamp`);
-  const items = [];
-  for (const x of d.data) {
-    if (seen.has(x.id)) continue;
-    seen.add(x.id);
-    const fid = x.relationships?.feed?.data?.id, hy = hydros.get(fid);
-    if (!hy) continue;
-    const a = x.attributes;
-    items.push({
-      id: x.id, cls: 'whale', t: a.timestamp, name: ORCA_LABEL[a.category] || 'Sound',
-      sci: a.source === 'machine' ? 'OrcaHello AI' : 'listener report', where: hy.a.name, country: 'Salish Sea',
-      lat: hy.a.lat_lng.lat, lon: hy.a.lat_lng.lng, open: () => openHydro(fid), play: () => { openHydro(fid); playHydro(fid); },
-    });
-  }
-  pushFeed(items, 0);
-}
-setInterval(() => document.querySelectorAll('#feed time, .site time').forEach(t => { t.textContent = ago(t.dataset.t); }), 15000);
+setInterval(() => document.querySelectorAll('.site time').forEach(t => { t.textContent = ago(t.dataset.t); }), 15000);
 
 async function loadCounts() {
   const d = await gql(`query($p:InputDuration){ counts(period:$p){ detections species stations } }`, { p: DAY });
-  $('stDet').textContent = fmt(d.counts.detections); $('stSpe').textContent = fmt(d.counts.species); $('stSta').textContent = fmt(d.counts.stations);
+  $('stDet').textContent = fmt(d.counts.detections); $('stSpe').textContent = fmt(d.counts.species); $('stSta').textContent = fmt(d.counts.stations); $('stSta').dataset.n = d.counts.stations;
 }
 
 // ---------------- tabs ----------------
@@ -217,6 +400,78 @@ function showTab(t) {
   document.querySelectorAll('.pane').forEach(p => { p.hidden = p.id !== 'pane-' + t; });
 }
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => showTab(b.dataset.t)));
+
+// ---------------- soundscape indices (computed in the browser from the station's clips) ----------------
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) { let bit = n >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; } }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2, xr = re[b] * cr - im[b] * ci, xi = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - xr; im[b] = im[a] - xi; re[a] += xr; im[a] += xi;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+}
+const SR = 44100, NFFT = 1024, HZ = SR / NFFT;
+async function soundscapeIndices(urls) {
+  const ctx = new OfflineAudioContext(1, 1, SR);
+  const win = new Float32Array(NFFT).map((_, i) => 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (NFFT - 1)));
+  const K = NFFT / 2, psd = new Float64Array(K);
+  const bandHit = new Float64Array(10), bandAll = new Float64Array(10);
+  let Ht = 0, clips = 0, secs = 0;
+  for (const url of urls) {
+    let x;
+    try { x = (await ctx.decodeAudioData(await (await fetch(url)).arrayBuffer())).getChannelData(0); } catch { continue; }
+    if (x.length < NFFT * 4) continue;
+    clips++; secs += x.length / SR;
+    // temporal entropy of the amplitude envelope (Sueur et al. 2008)
+    let sa = 0; for (let i = 0; i < x.length; i++) sa += Math.abs(x[i]);
+    let ht = 0; if (sa > 0) for (let i = 0; i < x.length; i++) { const p = Math.abs(x[i]) / sa; if (p > 0) ht -= p * Math.log(p); }
+    Ht += ht / Math.log(x.length);
+    const frames = [], re = new Float64Array(NFFT), im = new Float64Array(NFFT);
+    let peak = 1e-12;
+    for (let o = 0; o + NFFT <= x.length; o += NFFT) {
+      for (let i = 0; i < NFFT; i++) { re[i] = x[o + i] * win[i]; im[i] = 0; }
+      fft(re, im);
+      const mag = new Float32Array(K);
+      for (let k = 0; k < K; k++) { mag[k] = Math.hypot(re[k], im[k]); psd[k] += mag[k] * mag[k]; if (mag[k] > peak) peak = mag[k]; }
+      frames.push(mag);
+    }
+    // Acoustic Diversity Index: share of cells above -50 dB (re clip max) in ten 1 kHz bands (Villanueva-Rivera et al. 2011)
+    const thr = peak * Math.pow(10, -50 / 20);
+    for (const mag of frames) for (let k = 1; k < K; k++) { const b = Math.floor(k * HZ / 1000); if (b > 9) break; bandAll[b]++; if (mag[k] > thr) bandHit[b]++; }
+  }
+  if (!clips) return null;
+  const band = (lo, hi) => { let s = 0; for (let k = 0; k < K; k++) { const f = k * HZ; if (f >= lo && f < hi) s += psd[k]; } return s; };
+  const anthro = band(1000, 2000), bio = band(2000, 11000);
+  const ndsi = (bio - anthro) / (bio + anthro || 1);                       // Kasten et al. 2012
+  const props = [...bandHit].map((n, i) => bandAll[i] ? n / bandAll[i] : 0), ps = props.reduce((a, b) => a + b, 0);
+  let adi = 0; if (ps > 0) for (const p of props) { const q = p / ps; if (q > 0) adi -= q * Math.log(q); }
+  let st = 0; for (let k = 0; k < K; k++) st += Math.sqrt(psd[k]);
+  let hf = 0; for (let k = 0; k < K; k++) { const p = Math.sqrt(psd[k]) / st; if (p > 0) hf -= p * Math.log(p); }
+  hf /= Math.log(K);
+  return { ndsi, adi, H: (Ht / clips) * hf, clips, secs };
+}
+
+// ---------------- vegetation: MODIS NDVI + Vegetation Condition Index ----------------
+const MODIS = 'https://modis.ornl.gov/rst/api/v1/MOD13Q1';
+async function vegetation(lat, lon) {
+  const q = `latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}`;
+  const dates = (await getJSON(`${MODIS}/dates?${q}`)).dates.map(d => d.modis_date);
+  const last = dates.at(-1), doy = last.slice(5), yr = +last.slice(1, 5), have = new Set(dates);
+  const want = []; for (let y = yr; y >= yr - 9; y--) { const md = `A${y}${doy}`; if (have.has(md)) want.push(md); }
+  const vals = await Promise.all(want.map(md => getJSON(`${MODIS}/subset?${q}&band=250m_16_days_NDVI&startDate=${md}&endDate=${md}&kmAboveBelow=1&kmLeftRight=1`)
+    .then(r => { const px = (r.subset?.[0]?.data || []).filter(v => v > -2000); return px.length ? median(px) * 1e-4 : null; }).catch(() => null)));
+  const now = vals[0], hist = vals.filter(v => v != null);
+  if (now == null || hist.length < 3) return now == null ? null : { now, vci: null, years: hist.length, date: last };
+  const mn = Math.min(...hist), mx = Math.max(...hist);
+  return { now, vci: mx - mn > 0.02 ? (now - mn) / (mx - mn) : 0.5, years: hist.length, date: new Date(Date.UTC(yr, 0, +doy)).toISOString().slice(0, 10), mn, mx };
+}
 
 // ---------------- site panel ----------------
 const siteEl = $('site');
@@ -227,8 +482,19 @@ function selectAt(lat, lon) {
   if (footprint) { map.removeLayer(footprint); footprint = null; }
 }
 function siteLoading(title) { siteEl.replaceChildren(h('div', { class: 'site-head' }, h('h2', {}, title), h('p', {}, 'Loading…'))); showTab('site'); }
+const bar = (label, v, txt, hint) => h('div', { class: 'pillar', title: hint || '' },
+  h('span', { class: 'pl' }, label),
+  h('span', { class: 'pt' }, v != null ? h('i', { style: `width:${Math.max(2, v)}%;background:${sbiColor(v)}` }) : h('i', { class: 'na' })),
+  h('span', { class: 'pv' }, txt));
 
-async function openStation(id) {
+function clipItem(n, s) {
+  return async () => n.soundscape?.url ? {
+    sc: n.soundscape, title: `${n.species.commonName} · ${s.name}`,
+    sub: `BirdNET ${Math.round(n.confidence * 100)}% · ${new Date(n.timestamp).toLocaleString()}`,
+  } : null;
+}
+
+async function openStation(id, autoplay = false) {
   const tok = ++siteToken, st = stations.get(id);
   siteLoading(st?.name || 'Station');
   if (st) { selectAt(st.lat, st.lon); if (map.getZoom() < 5) map.flyTo([st.lat, st.lon], 7, { duration: 1.2 }); }
@@ -237,27 +503,59 @@ async function openStation(id) {
     s = (await gql(`query($id:ID!,$p:InputDuration){ station(id:$id){ id name type country location coords{lat lon} latestDetectionAt
       counts(period:$p){ detections species }
       topSpecies(limit:100, period:$p){ count species{ id commonName scientificName thumbnailUrl classification } }
-      detections(first:8, validSoundscape:true){ nodes{ id timestamp confidence species{ commonName scientificName thumbnailUrl classification } soundscape{ url startTime endTime } } } } }`, { id, p: DAY })).station;
+      detections(first:10, validSoundscape:true){ nodes{ id timestamp confidence species{ commonName scientificName thumbnailUrl classification } soundscape{ url startTime endTime } } } } }`, { id, p: DAY })).station;
   } catch (e) { if (tok === siteToken) siteEl.replaceChildren(h('p', { class: 'empty' }, 'Could not load this station: ' + e.message)); return; }
   if (tok !== siteToken || !s) return;
   if (!st && s.coords) { selectAt(s.coords.lat, s.coords.lon); map.flyTo([s.coords.lat, s.coords.lon], 7); }
 
   const top = s.topSpecies || [], total = top.reduce((a, x) => a + x.count, 0);
-  const S = s.counts?.species ?? top.length;
-  let H = 0; for (const x of top) { const p = x.count / total; if (p > 0) H -= p * Math.log(p); }
-  const J = top.length > 1 ? H / Math.log(top.length) : 0;
+  const m = diversity(top.map(x => ({ n: x.count, c: normCls(x.species.classification) })));
+  const bal = balance(s.coords.lat, m);
   const byCls = {}; for (const x of top) { const c = normCls(x.species.classification); byCls[c] = (byCls[c] || 0) + x.count; }
+  const dets = s.detections?.nodes || [];
+
+  // Combined site health: mean of the pillars that are available.
+  const pillars = { bio: bal?.sbi ?? null, sound: undefined, veg: undefined };
+  const healthBox = h('div', { class: 'health' });
+  const soundTxt = h('div', { class: 'idx' }, h('p', { class: 'note' }, dets.length ? `Analysing ${Math.min(6, dets.length)} recent clips in your browser…` : 'No recent audio to analyse.'));
+  const vegTxt = h('div', { class: 'idx' }, h('p', { class: 'note' }, 'Fetching MODIS greenness for this spot…'));
+  const drawHealth = () => {
+    const have = Object.values(pillars).filter(v => v != null);
+    const pending = Object.values(pillars).some(v => v === undefined);
+    const score = have.length ? Math.round(have.reduce((a, b) => a + b, 0) / have.length) : null;
+    healthBox.replaceChildren(
+      h('div', { class: 'hero-row' }, h('span', { class: 'hero-n' }, score ?? '–'), h('div', {}, h('p', { class: 'hero-w' }, score != null ? SBI_WORD(score) : 'Not enough data'),
+        h('p', { class: 'hero-s' }, `Site health · ${have.length} of 3 measures${pending ? ', more loading…' : ''}`))),
+      score != null ? meter(score) : null, score != null ? meterScale() : null,
+      h('div', { class: 'pillars' },
+        bar('Biodiversity', pillars.bio, pillars.bio != null ? String(pillars.bio) : 'too little data', 'Soundscape Balance Index from 24 h of recognitions'),
+        bar('Soundscape', pillars.sound ?? null, pillars.sound === undefined ? '…' : pillars.sound == null ? 'n/a' : String(pillars.sound), 'NDSI rescaled to 0–100: high when biological sound outweighs traffic/machine noise'),
+        bar('Vegetation', pillars.veg ?? null, pillars.veg === undefined ? '…' : pillars.veg == null ? 'n/a' : String(pillars.veg), 'MODIS Vegetation Condition Index: greenness vs the same date in past years')),
+    );
+  };
+  drawHealth();
 
   const max = top[0]?.count || 1;
   siteEl.replaceChildren(
     h('div', { class: 'site-head' }, h('h2', {}, s.name),
       h('p', {}, [s.location, s.country].filter(Boolean).join(', ') || `${s.coords.lat.toFixed(2)}, ${s.coords.lon.toFixed(2)}`, ' · BirdWeather ', s.type === 'puc' ? 'PUC' : s.type, ' · last heard ', h('time', { 'data-t': s.latestDetectionAt }, ago(s.latestDetectionAt)))),
-    h('div', { class: 'metrics' },
-      h('div', { class: 'metric' }, h('b', {}, S), h('span', {}, 'species, 24 h')),
-      h('div', { class: 'metric', title: 'Shannon diversity index H′ from 24 h detection counts' }, h('b', {}, H.toFixed(2)), h('span', {}, 'Shannon H′')),
-      h('div', { class: 'metric', title: 'Pielou evenness J′ = H′ / ln(S)' }, h('b', {}, J.toFixed(2)), h('span', {}, 'evenness J′'))),
-    h('p', { class: 'note' }, `${fmt(s.counts?.detections)} recognitions in 24 h (${Math.round((s.counts?.detections || 0) / 24)}/hour). `,
-      J > 0.75 ? 'Activity is spread across many species.' : J > 0.5 ? 'A few species lead, with a varied supporting cast.' : 'A handful of species dominate what this microphone hears.'),
+    h('div', { class: 'row' }, dets.length ? h('button', { class: 'btn', onclick: () => setPlaylist(dets.map(n => clipItem(n, s)), 'station') }, '▶ Play recent clips') : null),
+    h('div', { class: 'sec' }, h('h3', {}, 'Site health', h('small', {}, 'sound + vegetation')), healthBox),
+    h('div', { class: 'sec' }, h('h3', {}, 'Biodiversity', h('small', {}, `${fmt(s.counts?.detections)} recognitions, 24 h`)),
+      bal ? h('div', { class: 'pillars' },
+        bar('Diversity', Math.round(bal.D * 100), `${Math.round(bal.D * 100)}th pct`, `Hill q1 percentile among ${bal.ref.n} stations within ${bal.ref.span}° latitude band`),
+        bar('Evenness', Math.round(bal.E * 100), bal.E.toFixed(2), 'Pielou J′'),
+        bar('Breadth', Math.round(bal.B * 100), `${nGroups(m)} group${nGroups(m) > 1 ? 's' : ''}`, 'Animal groups heard: birds, insects, frogs, bats, mammals')) :
+        h('p', { class: 'note' }, `Not enough recognitions for a reliable score (needs ${MIN_N}+ recognitions and ${MIN_S}+ species in 24 h).`),
+      h('div', { class: 'metrics m4' },
+        h('div', { class: 'metric', title: 'Observed species richness (Hill q0)' }, h('b', {}, m.S), h('span', {}, 'species')),
+        h('div', { class: 'metric', title: 'Hill q1 = exp(H′): effective number of species' }, h('b', {}, hill1(m).toFixed(1)), h('span', {}, 'effective q1')),
+        h('div', { class: 'metric', title: 'Hill q2 = 1/Σp²: effective number of dominant species (inverse Simpson)' }, h('b', {}, hill2(m).toFixed(1)), h('span', {}, 'dominant q2')),
+        h('div', { class: 'metric', title: 'Bias-corrected Chao1 estimate of total richness' }, h('b', {}, Math.round(chao1(m))), h('span', {}, 'Chao1 est.'))),
+      h('p', { class: 'hint' }, `Shannon H′ ${m.H.toFixed(2)} · sample coverage ${Math.round(coverage(m) * 100)}% · `,
+        hill2(m) < hill1(m) / 2 ? 'a few species dominate what this microphone hears.' : 'activity is spread across many species.')),
+    h('div', { class: 'sec' }, h('h3', {}, 'Soundscape', h('small', {}, 'acoustic indices from recent clips')), soundTxt),
+    h('div', { class: 'sec' }, h('h3', {}, 'Vegetation', h('small', {}, 'NASA MODIS, 250 m')), vegTxt),
     Object.keys(byCls).length ? h('div', { class: 'sec' }, h('h3', {}, 'Who is calling', h('small', {}, 'share of detections')),
       h('div', { class: 'taxa' }, Object.entries(byCls).map(([c, n]) => h('span', { style: `--c:${cssVar(c)};width:${(n / total) * 100}%`, title: `${CLS[c] || c}: ${n}` }))),
       h('div', { class: 'taxa-key' }, Object.entries(byCls).map(([c, n]) => h('span', {}, h('i', { style: `--c:${cssVar(c)}` }), `${CLS[c] || c} ${Math.round((n / total) * 100)}%`)))) : null,
@@ -267,11 +565,37 @@ async function openStation(id) {
         h('div', {}, x.species.commonName, h('div', { class: 'bar', style: `width:${(x.count / max) * 100}%;--c:${cssVar(normCls(x.species.classification))}` })),
         h('span', { class: 'n' }, x.count))))),
     h('div', { class: 'sec' }, h('h3', {}, 'Latest recognitions', h('small', {}, 'tap to listen')),
-      h('ul', { class: 'dets' }, (s.detections?.nodes || []).map(n => h('li', { style: 'cursor:pointer', onclick: () => playClip(n.soundscape, `${n.species.commonName} · ${s.name}`, `${Math.round(n.confidence * 100)}% confidence · ${new Date(n.timestamp).toLocaleString()}`) },
+      h('ul', { class: 'dets' }, dets.map((n, i) => h('li', { class: 'clickable', onclick: () => setPlaylist(dets.map(x => clipItem(x, s)), 'station', i) },
         h('span', {}, '▸ ', n.species.commonName), h('span', {}, h('time', { 'data-t': n.timestamp }, ago(n.timestamp))))))),
     emitSection(s.coords.lat, s.coords.lon, tok),
     h('div', { class: 'row' }, h('a', { class: 'btn ghost', href: `https://app.birdweather.com/stations/${s.id}`, target: '_blank', rel: 'noopener' }, 'Open on BirdWeather ↗')),
   );
+  if (autoplay && dets.length) setPlaylist(dets.map(n => clipItem(n, s)), 'station');
+
+  // async measurements
+  const urls = [...new Set(dets.map(n => n.soundscape?.url).filter(Boolean))].slice(0, 6);
+  (urls.length ? soundscapeIndices(urls) : Promise.resolve(null)).then(r => {
+    if (tok !== siteToken) return;
+    pillars.sound = r ? Math.round(((r.ndsi + 1) / 2) * 100) : null;
+    soundTxt.replaceChildren(r ? h('div', { class: 'metrics' },
+      h('div', { class: 'metric', title: 'Normalized Difference Soundscape Index, −1 (all machine/traffic band) to +1 (all biological band)' }, h('b', {}, (r.ndsi >= 0 ? '+' : '') + r.ndsi.toFixed(2)), h('span', {}, 'NDSI')),
+      h('div', { class: 'metric', title: 'Acoustic Diversity Index: Shannon index across ten 1 kHz bands (max ln 10 = 2.30)' }, h('b', {}, r.adi.toFixed(2)), h('span', {}, 'ADI')),
+      h('div', { class: 'metric', title: 'Acoustic entropy H = Ht × Hf, 0 (pure tone) to 1 (white noise)' }, h('b', {}, r.H.toFixed(2)), h('span', {}, 'entropy H'))) : h('p', { class: 'note' }, 'Could not analyse audio for this station.'),
+      r ? h('p', { class: 'hint' }, `${r.clips} clips, ${Math.round(r.secs)} s of audio. `, r.ndsi > 0.5 ? 'Biological sound clearly outweighs the traffic and machinery band.' : r.ndsi > 0 ? 'Biological sound leads, with noticeable low-frequency noise.' : 'The 1–2 kHz band, where traffic and machinery sit, outweighs the biological band.', ' Clips are saved when a bird is recognised, so these lean biological.') : null);
+    drawHealth();
+  }).catch(() => { if (tok === siteToken) { pillars.sound = null; soundTxt.replaceChildren(h('p', { class: 'note' }, 'Could not analyse audio.')); drawHealth(); } });
+
+  vegetation(s.coords.lat, s.coords.lon).then(v => {
+    if (tok !== siteToken) return;
+    pillars.veg = v?.vci != null ? Math.round(v.vci * 100) : null;
+    vegTxt.replaceChildren(v ? h('div', { class: 'metrics' },
+      h('div', { class: 'metric', title: 'Median NDVI in a ~2 km box around the station' }, h('b', {}, v.now.toFixed(2)), h('span', {}, 'NDVI now')),
+      h('div', { class: 'metric', title: 'Vegetation Condition Index (Kogan 1995): 0 = lowest greenness for this date in the record, 1 = highest' }, h('b', {}, v.vci != null ? v.vci.toFixed(2) : '–'), h('span', {}, 'VCI')),
+      h('div', { class: 'metric' }, h('b', {}, v.years), h('span', {}, 'years compared'))) : h('p', { class: 'note' }, 'No MODIS vegetation data here.'),
+      v ? h('p', { class: 'hint' }, `16-day composite from ${v.date}. `, v.now < 0.15 ? 'Little vegetation: urban, bare ground, snow or water. ' : v.now > 0.6 ? 'Dense green vegetation. ' : '',
+        v.vci == null ? '' : v.vci < 0.35 ? 'Greenness is near the low end for this time of year, which can signal drought or disturbance.' : v.vci > 0.65 ? 'Greener than usual for this time of year.' : 'Greenness is typical for this time of year.') : null);
+    drawHealth();
+  }).catch(() => { if (tok === siteToken) { pillars.veg = null; vegTxt.replaceChildren(h('p', { class: 'note' }, 'Could not reach MODIS right now.')); drawHealth(); } });
 }
 
 async function openHydro(fid) {
@@ -282,9 +606,11 @@ async function openHydro(fid) {
   if (map.getZoom() < 6) map.flyTo([a.lat_lng.lat, a.lat_lng.lng], 8, { duration: 1.2 });
   const intro = new DOMParser().parseFromString(a.intro_html || '', 'text/html').body.textContent.replace(/\s+/g, ' ').replace(/\*+[^*]*\*+/g, '').trim();
   const dets = h('ul', { class: 'dets' }, h('li', {}, 'Loading…'));
+  const others = [...hydros.values()].filter(x => x.id !== fid && x.live);
   siteEl.replaceChildren(
-    h('div', { class: 'site-head' }, h('h2', {}, a.name), h('p', {}, `Orcasound hydrophone · ${a.lat_lng.lat.toFixed(3)}, ${a.lat_lng.lng.toFixed(3)}`)),
-    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => playHydro(fid) }, '▶ Listen live underwater')),
+    h('div', { class: 'site-head' }, h('h2', {}, a.name), h('p', {}, `Orcasound hydrophone · ${a.lat_lng.lat.toFixed(3)}, ${a.lat_lng.lng.toFixed(3)} · `, hy.live === false ? `offline${hy.last ? ', last audio ' + ago(hy.last) : ''}` : 'live')),
+    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => playHydro(fid) }, '▶ Listen live underwater'),
+      hy.live === false && others.length ? h('button', { class: 'btn ghost', onclick: () => { openHydro(others[0].id); playHydro(others[0].id); } }, `Try ${others[0].a.name} (live)`) : null),
     intro ? h('p', { class: 'note', style: 'margin-top:12px' }, intro.length > 420 ? intro.slice(0, 420).replace(/\s\S*$/, '') + '…' : intro) : null,
     h('div', { class: 'sec' }, h('h3', {}, 'Recent reports', h('small', {}, 'listeners + OrcaHello AI')), dets),
     h('p', { class: 'note', style: 'margin-top:12px' }, 'For water health here, switch the layer to Ocean chlorophyll (PACE): high chlorophyll means more phytoplankton, the base of the food web orcas and salmon depend on, but very high values can mean blooms.'),
@@ -300,7 +626,7 @@ async function openHydro(fid) {
       h('span', {}, h('time', { 'data-t': x.attributes.timestamp }, ago(x.attributes.timestamp))))) : [h('li', {}, 'No reports yet.')]));
   } catch { dets.replaceChildren(h('li', {}, 'Could not load reports.')); }
 }
-
+const ORCA_LABEL = { whale: 'Whale call', vessel: 'Vessel noise', other: 'Other sound' };
 // ---------------- EMIT ----------------
 function parsePoly(p) {
   const n = String(p).trim().split(/\s+/).map(Number), pts = [];
@@ -384,57 +710,105 @@ async function loadPlumes() {
 $('lyMethane').addEventListener('change', e => { if (e.target.checked) { plumeLayer.addTo(map); loadPlumes().catch(() => {}); } else map.removeLayer(plumeLayer); });
 map.on('moveend', () => { clearTimeout(plumeTimer); plumeTimer = setTimeout(() => loadPlumes().catch(() => {}), 600); });
 
-// ---------------- player + spectrogram ----------------
-const audio = $('audio'), pbtn = $('pbtn'), canvas = $('spec'), g2 = canvas.getContext('2d');
-let actx, analyser, gain, hls = null, clipEnd = null, raf = 0, hasSource = false;
+// ---------------- player: playlists, live streams, soundscape tour ----------------
+const audio = $('audio'), pbtn = $('pbtn'), pnext = $('pnext'), canvas = $('spec'), g2 = canvas.getContext('2d');
+let actx, analyser, gain, hls = null, clipEnd = null, raf = 0;
+let playlist = [], pi = -1, pmode = 'idle', ptok = 0, advancing = false;
 function ensureAudio() {
-  if (actx) return;
+  if (actx) { actx.resume(); return; }
   actx = new (window.AudioContext || window.webkitAudioContext)();
   const src = actx.createMediaElementSource(audio);
   analyser = actx.createAnalyser(); analyser.fftSize = 4096; analyser.smoothingTimeConstant = 0.2; analyser.minDecibels = -100; analyser.maxDecibels = -25;
   gain = actx.createGain(); gain.gain.value = +$('vol').value;
   src.connect(analyser); analyser.connect(gain); gain.connect(actx.destination);
+  actx.resume();
   drawTicks();
 }
 function stopHls() { if (hls) { hls.destroy(); hls = null; } }
-function setNow(title, sub) { $('ptitle').textContent = title; $('psub').textContent = sub; pbtn.disabled = false; hasSource = true; }
-async function playClip(sc, title, sub) {
-  if (!sc?.url) return;
-  ensureAudio(); actx.resume(); stopHls();
-  clipEnd = sc.endTime != null ? sc.endTime + 1.5 : null;
-  audio.src = sc.url;
-  setNow(title, sub);
-  audio.addEventListener('loadedmetadata', () => { audio.currentTime = Math.max(0, (sc.startTime || 0) - 0.75); }, { once: true });
-  try { await audio.play(); } catch (e) { $('psub').textContent = 'Could not play this clip.'; }
+function setNow(title, sub) { $('ptitle').textContent = title; $('psub').textContent = sub; }
+function setBusy(on) { $('player').classList.toggle('busy', on); }
+
+async function startClip(d) {
+  ensureAudio(); stopHls();
+  clipEnd = d.sc.endTime != null ? d.sc.endTime + 1.5 : null;
+  const pos = playlist.length > 1 ? ` · ${pi + 1} of ${playlist.length}` : '';
+  setNow(d.title, d.sub + pos); setBusy(true);
+  if (d.lat != null) selectAt(d.lat, d.lon);
+  audio.src = d.sc.url;
+  audio.addEventListener('loadedmetadata', () => { audio.currentTime = Math.max(0, (d.sc.startTime || 0) - 0.75); }, { once: true });
+  try { await audio.play(); }
+  catch (e) { setBusy(false); if (e.name !== 'AbortError') { $('psub').textContent = 'Could not play this clip, skipping…'; setTimeout(advance, 900); } }
 }
+async function playIndex(i) {
+  const tok = ++ptok;
+  pnext.disabled = false;
+  for (; i < playlist.length; i++) {
+    setBusy(true);
+    let d = null; try { d = await playlist[i](); } catch { }
+    if (tok !== ptok) return;
+    if (d) { pi = i; await startClip(d); return; }
+  }
+  setBusy(false); pi = playlist.length; pnext.disabled = true;
+  setNow(pmode === 'tour' ? 'Tour finished' : 'End of clips', 'Press play for a soundscape tour of the sites in view');
+  pmode = 'idle';
+}
+function setPlaylist(items, mode, start = 0) {
+  playlist = items; pmode = mode; pi = -1;
+  ensureAudio();
+  playIndex(start);
+}
+function advance() { if (advancing || pmode === 'live' || pmode === 'idle') return; advancing = true; setTimeout(() => { advancing = false; playIndex(pi + 1); }, 500); }
+
+// Tour: the stations in view, from richest to thinnest balance, one recent clip each.
+function startTour() {
+  const b = map.getBounds();
+  let list = [...stations.values()].filter(s => s.bal && b.contains([s.lat, s.lon])).sort((x, y) => y.bal.sbi - x.bal.sbi);
+  if (!list.length) list = [...stations.values()].filter(s => s.bal).sort((x, y) => y.bal.sbi - x.bal.sbi);
+  if (list.length > 30) { const step = list.length / 30; list = Array.from({ length: 30 }, (_, i) => list[Math.floor(i * step)]); }
+  if (!list.length) { setNow('Soundscape tour', 'Still gathering station data, try again in a moment'); return; }
+  setPlaylist(list.map(st => async () => {
+    const d = (await gql(`query($id:ID!){ station(id:$id){ detections(first:3, validSoundscape:true){ nodes{ timestamp confidence species{ commonName } soundscape{ url startTime endTime } } } } }`, { id: st.id })).station;
+    const n = d?.detections?.nodes?.find(x => x.soundscape?.url);
+    return n ? { sc: n.soundscape, lat: st.lat, lon: st.lon, title: `${st.name} · balance ${st.bal.sbi}`, sub: `${n.species.commonName}, ${ago(n.timestamp)}` } : null;
+  }), 'tour');
+}
+
 async function playHydro(fid) {
   const hy = hydros.get(fid); if (!hy) return;
-  ensureAudio(); actx.resume(); stopHls(); clipEnd = null;
-  const base = `https://s3-${hy.a.bucket_region || 'us-west-2'}.amazonaws.com/${hy.a.bucket}/${hy.a.node_name}`;
-  setNow(`${hy.a.name} · live hydrophone`, 'Connecting to the stream…');
+  const tok = ++ptok;
+  ensureAudio(); stopHls(); audio.pause(); clipEnd = null; pmode = 'live'; pnext.disabled = true;
+  setNow(`${hy.a.name} · live hydrophone`, 'Connecting to the stream…'); setBusy(true);
   try {
-    const ts = (await (await fetch(`${base}/latest.txt`, { cache: 'no-store' })).text()).trim();
-    const url = `${base}/hls/${ts}/live.m3u8`;
-    const txt = await (await fetch(url, { cache: 'no-store' })).text();
-    const last = [...txt.matchAll(/PROGRAM-DATE-TIME:([^\s]+)/g)].pop()?.[1];
-    if (last && Date.now() - new Date(last) > 10 * 60e3) { $('psub').textContent = `Offline · last audio ${ago(last)}`; return; }
-    if (window.Hls?.isSupported()) { hls = new Hls({ liveSyncDuration: 20 }); hls.loadSource(url); hls.attachMedia(audio); }
-    else if (audio.canPlayType('application/vnd.apple.mpegurl')) audio.src = url;
+    const live = await hydroStatus(hy);
+    if (tok !== ptok) return;
+    if (!live) {
+      const alt = [...hydros.values()].find(x => x.live);
+      setBusy(false); pmode = 'idle';
+      setNow(`${hy.a.name} · offline`, hy.last ? `No audio since ${ago(hy.last)}${alt ? `. Try ${alt.a.name}, it's live.` : '.'}` : `Stream unavailable${alt ? `. Try ${alt.a.name}, it's live.` : '.'}`);
+      return;
+    }
+    if (window.Hls?.isSupported()) { hls = new Hls({ liveSyncDuration: 20 }); hls.loadSource(hy.url); hls.attachMedia(audio); }
+    else if (audio.canPlayType('application/vnd.apple.mpegurl')) audio.src = hy.url;
     else throw new Error('HLS unsupported');
     await audio.play();
     $('psub').textContent = 'Live from the Salish Sea · whales, vessels, seals, snapping shrimp';
-  } catch (e) { $('psub').textContent = 'Stream unavailable right now.'; }
+  } catch (e) { if (tok === ptok) { setBusy(false); pmode = 'idle'; $('psub').textContent = 'Stream unavailable right now.'; } }
 }
-audio.addEventListener('timeupdate', () => { if (clipEnd && audio.currentTime > clipEnd) audio.pause(); });
+audio.addEventListener('timeupdate', () => { if (clipEnd && audio.currentTime > clipEnd && !audio.paused) { audio.pause(); advance(); } });
+audio.addEventListener('ended', () => advance());
+audio.addEventListener('playing', () => setBusy(false));
+audio.addEventListener('waiting', () => setBusy(true));
 audio.addEventListener('play', () => { $('icPlay').hidden = true; $('icStop').hidden = false; pbtn.setAttribute('aria-label', 'Pause'); loop(); });
-audio.addEventListener('pause', () => { $('icPlay').hidden = false; $('icStop').hidden = true; pbtn.setAttribute('aria-label', 'Play'); });
+audio.addEventListener('pause', () => { $('icPlay').hidden = false; $('icStop').hidden = true; pbtn.setAttribute('aria-label', 'Play'); setBusy(false); });
 pbtn.addEventListener('click', () => {
-  if (!hasSource) return;
-  if (audio.paused) { actx?.resume(); if (clipEnd && audio.currentTime > clipEnd - 0.1) audio.currentTime = Math.max(0, clipEnd - 6); audio.play(); }
-  else audio.pause();
+  if (!audio.paused) { ++ptok; audio.pause(); return; }
+  if (pmode === 'idle' || (!audio.src && !hls)) { startTour(); return; }
+  ensureAudio();
+  if (clipEnd && audio.currentTime > clipEnd - 0.1) { playIndex(pi + 1); return; }
+  audio.play().catch(() => {});
 });
+pnext.addEventListener('click', () => { if (pmode !== 'live') playIndex(pi + 1); });
 $('vol').addEventListener('input', e => { if (gain) gain.gain.value = +e.target.value; });
-
 // colour map: night -> teal -> gold -> white
 const LUT = (() => {
   const stops = [[0, [7, 16, 17]], [0.35, [20, 70, 80]], [0.6, [60, 170, 150]], [0.82, [227, 183, 101]], [1, [255, 248, 230]]];
@@ -483,10 +857,9 @@ const timers = [];
 function setLive(ok) { $('liveDot').classList.toggle('on', ok); $('liveText').textContent = ok ? 'live' : 'reconnecting…'; }
 function startPolling() {
   stopPolling();
-  timers.push(setInterval(() => pollBW(14, 7000).then(() => setLive(true)).catch(() => setLive(false)), 8000));
-  timers.push(setInterval(() => pollRare().catch(() => {}), 30000));
-  timers.push(setInterval(() => pollOrca().catch(() => {}), 45000));
+  timers.push(setInterval(() => pollPulses().then(() => setLive(true)).catch(() => setLive(false)), 8000));
   timers.push(setInterval(() => loadCounts().catch(() => {}), 60000));
+  timers.push(setInterval(() => { if (Date.now() - lastRun > CACHE_MS) analyseAll(); }, 60000));
 }
 function stopPolling() { timers.splice(0).forEach(clearInterval); }
 let resumeAudio = false;
@@ -498,13 +871,11 @@ document.addEventListener('visibilitychange', () => {
 // ---------------- boot ----------------
 if (innerWidth < 640) document.querySelector('.layers').open = false;
 (async () => {
-  loadCounts().catch(() => {});
-  await loadHydros().catch(() => {});
-  await Promise.all([
-    pollBW(20, 0).then(() => setLive(true)).catch(() => setLive(false)),
-    pollRare().catch(() => {}),
-    pollOrca(6).catch(() => {}),
-  ]);
+  loadCounts().then(scheduleRefresh).catch(() => {});
+  loadHydros().catch(() => {});
+  pollPulses().then(() => setLive(true)).catch(() => setLive(false));
   startPolling();
-  loadStations().catch(() => {});
+  if (loadCache()) scheduleRefresh();
+  else { analyseAll(); scheduleRefresh(); }
+  loadStations().then(scheduleRefresh).catch(() => {});
 })();
