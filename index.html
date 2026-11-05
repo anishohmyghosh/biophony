@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Biophony</title>
+<meta name="description" content="A live map of the planet's sound. Free acoustic monitors around the world stream species recognitions; NASA EMIT, MODIS and PACE add the view from orbit.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,400&family=Manrope:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%230f1d1f'/%3E%3Cpath d='M6 16h3l2-6 3 12 3-9 2 5 2-2h5' stroke='%2378d6c0' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Biophony</h1>
+    <p class="sub">The living planet, listening live. <span class="dot" id="liveDot"></span><span id="liveText">connecting…</span></p>
+  </div>
+  <dl class="stats" aria-label="Last 24 hours across the network">
+    <div><dt>Recognitions, 24 h</dt><dd id="stDet">–</dd></div>
+    <div><dt>Species</dt><dd id="stSpe">–</dd></div>
+    <div><dt>Listening stations</dt><dd id="stSta">–</dd></div>
+    <div><dt>Hydrophones</dt><dd id="stHyd">–</dd></div>
+  </dl>
+</header>
+
+<main class="layout">
+  <section class="map-wrap" aria-label="World map of acoustic monitors">
+    <div id="map"></div>
+    <div class="chips" id="chips" role="group" aria-label="Filter by group">
+      <button class="chip on" data-c="bird" aria-pressed="true"><i style="--c:var(--bird)"></i>Birds</button>
+      <button class="chip on" data-c="bat" aria-pressed="true"><i style="--c:var(--bat)"></i>Bats</button>
+      <button class="chip on" data-c="insect" aria-pressed="true"><i style="--c:var(--insect)"></i>Insects</button>
+      <button class="chip on" data-c="amphibian" aria-pressed="true"><i style="--c:var(--amphibian)"></i>Frogs</button>
+      <button class="chip on" data-c="mammal" aria-pressed="true"><i style="--c:var(--mammal)"></i>Mammals</button>
+      <button class="chip on" data-c="whale" aria-pressed="true"><i style="--c:var(--whale)"></i>Underwater</button>
+    </div>
+    <details class="layers" open>
+      <summary>Layers</summary>
+      <p class="lh">Sound</p>
+      <label><input type="checkbox" id="lyStations" checked> BirdWeather stations</label>
+      <label><input type="checkbox" id="lyHydro" checked> Orcasound hydrophones</label>
+      <p class="lh">From orbit · NASA</p>
+      <label><input type="radio" name="sat" value="none" checked> None</label>
+      <label><input type="radio" name="sat" value="ndvi"> Vegetation greenness <small>MODIS NDVI, 8-day</small></label>
+      <label><input type="radio" name="sat" value="chl"> Ocean chlorophyll <small>PACE OCI, daily</small></label>
+      <label><input type="radio" name="sat" value="true"> True colour <small>VIIRS, daily</small></label>
+      <label><input type="checkbox" id="lyMethane"> EMIT methane plumes in view</label>
+      <div class="legend" id="legend" hidden></div>
+    </details>
+  </section>
+
+  <aside class="panel">
+    <div class="tabs" role="tablist">
+      <button role="tab" class="tab on" data-t="live" aria-selected="true">Live feed</button>
+      <button role="tab" class="tab" data-t="site" aria-selected="false">Site</button>
+      <button role="tab" class="tab" data-t="about" aria-selected="false">About</button>
+    </div>
+
+    <div class="pane" id="pane-live">
+      <p class="pane-note">New recognitions appear as monitors report them. Tap one to hear the clip; tap the station name to open the site.</p>
+      <ol class="feed" id="feed"></ol>
+    </div>
+
+    <div class="pane" id="pane-site" hidden>
+      <div id="site"><p class="empty">Pick a station or hydrophone on the map to see what it's hearing, its acoustic biodiversity, and what NASA's EMIT has seen there.</p></div>
+    </div>
+
+    <div class="pane prose" id="pane-about" hidden>
+      <h2>What this is</h2>
+      <p>A live view of the planet's <em>biophony</em>: the combined sound of living things. Thousands of free, always-on acoustic monitors stream what they recognise, and satellite layers add the view from orbit, so you can compare what a place sounds like with how healthy it looks.</p>
+      <h3>Listening</h3>
+      <ul>
+        <li><strong>BirdWeather</strong>: over 10,000 stations (BirdWeather PUCs and BirdNET-Pi) running the BirdNET model. Birds, plus bats, insects, frogs and some mammals. Each recognition comes with the original audio clip.</li>
+        <li><strong>Orcasound</strong>: live hydrophones in the Salish Sea. Whale calls, vessels and other sounds are flagged by listeners and by the OrcaHello model, and you can listen to the live stream.</li>
+      </ul>
+      <h3>From orbit</h3>
+      <ul>
+        <li><strong>EMIT</strong> (imaging spectrometer on the ISS, 285 bands, 60 m): for each site, the most recent scenes covering it, with cloud cover, a preview and the full reflectance data. EMIT only covers ±52° latitude and passes irregularly. Methane plume detections can be shown on the map.</li>
+        <li><strong>MODIS NDVI</strong>: plant greenness on land. <strong>PACE OCI chlorophyll</strong>: phytoplankton in the ocean. <strong>VIIRS</strong>: true colour.</li>
+      </ul>
+      <h3>The biodiversity readout</h3>
+      <ul>
+        <li><strong>Richness</strong>: number of species recognised in the last 24 hours.</li>
+        <li><strong>Shannon diversity (H′)</strong>: higher when there are many species and none dominates.</li>
+        <li><strong>Evenness (J′)</strong>: H′ divided by its maximum. Near 1 means detections are spread evenly; near 0 means one or two species dominate.</li>
+      </ul>
+      <p>These describe what one microphone heard, not the whole ecosystem. Recognitions can be wrong (BirdNET is strongest on North American and European birds), station hardware differs, and a busy feeder or a noisy road changes everything. Treat them as signals to compare over time, not as a health score.</p>
+      <h3>Credits</h3>
+      <p class="small">Data: <a href="https://www.birdweather.com" target="_blank" rel="noopener">BirdWeather</a> &amp; <a href="https://birdnet.cornell.edu" target="_blank" rel="noopener">BirdNET</a> (K. Lisa Yang Center, Cornell Lab of Ornithology / TU Chemnitz), <a href="https://www.orcasound.net" target="_blank" rel="noopener">Orcasound</a>, NASA <a href="https://earth.jpl.nasa.gov/emit/" target="_blank" rel="noopener">EMIT</a> via <a href="https://lpdaac.usgs.gov" target="_blank" rel="noopener">LP DAAC</a> &amp; CMR, NASA <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noopener">GIBS</a>. Basemap © Esri, HERE, Garmin, OpenStreetMap contributors. Made by <a href="https://anishohmyghosh.github.io/website/" target="_blank" rel="noopener">Anish Ghosh</a>.</p>
+    </div>
+  </aside>
+</main>
+
+<footer class="player" id="player">
+  <button class="pbtn" id="pbtn" aria-label="Play" disabled>
+    <svg id="icPlay" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>
+    <svg id="icStop" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>
+  </button>
+  <div class="pinfo">
+    <p class="ptitle" id="ptitle">Nothing playing</p>
+    <p class="psub" id="psub">Tap a recognition or a hydrophone to listen</p>
+  </div>
+  <div class="spec">
+    <canvas id="spec"></canvas>
+    <div class="ticks" id="ticks"></div>
+  </div>
+  <label class="pvol"><span class="sr">Volume</span><input type="range" id="vol" min="0" max="1" step="0.01" value="0.8"></label>
+  <audio id="audio" crossorigin="anonymous" preload="none"></audio>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
