@@ -16,7 +16,13 @@ export const lvl = (ins, target) => clamp(Math.min(10 ** ((target - ins.rmsDb) /
 const QLABEL = { clean: 'Clean', ok: 'Usable', noisy: 'Noisy', silent: 'Near-silent' };
 // Library loads in waves: check the most promising recordings first (highest BirdNET confidence),
 // show the 10 cleanest, and check more only as the list is scrolled.
+// Each check downloads a recording, so checking is budgeted: 48 per pin to start, +24 each time
+// the person scrolls to the end of the list. Nothing chains on its own past the budget.
+let budget = 48;
+const checkedCount = () => pool.filter(s => s.ins || s.insErr || s.insQueued).length;
 export function inspectPool(n = 24) {
+  n = Math.min(n, budget - checkedCount());
+  if (n <= 0) { renderLib(); return; }
   const g = gen, todo = pool.filter(s => !s.ins && !s.insErr && !s.insQueued).sort((a, b) => b.conf - a.conf).slice(0, n);
   if (!todo.length) return;
   todo.forEach(s => { s.insQueued = true; });
@@ -26,31 +32,34 @@ export function inspectPool(n = 24) {
     try { s.ins = await inspect(s); } catch { s.insErr = true; }
     inspecting--;
     if (g !== gen) return;
-    if (inspecting > 0) { libProgress(); return; }
+    // show clean sounds as soon as there are a few, and keep checking in the background
+    if (inspecting > 0) { if (!document.querySelector('#libList .lib-row') && libItems().length >= 5) renderLib(); else libProgress(); return; }
     const passing = libItems().length, left = pool.some(x => !x.ins && !x.insErr && !x.insQueued);
-    if (passing < libShown && left) { inspectPool(); return; }
-    if (passing < libShown && poolMore) { loadPool(true).then(() => { if (g === gen) inspectPool(); }); return; }
+    const room = checkedCount() < budget;
+    if (passing < libShown && left && room) { inspectPool(); return; }
+    if (passing < libShown && poolMore && room) { loadPool(true).then(() => { if (g === gen) inspectPool(); }); return; }
     if (passing < 10 && widenDone !== gen) {
       $('libMsg').textContent = `Few clean recordings within ${kmTxt(region.radius)}. Widening the circle…`;
       setTimeout(() => { if (g === gen && !expandPin()) { markWidened(); renderLib(); } }, 400);
       return;
     }
     renderLib();
-    if (scrolled && nearEnd()) moreLib();
   });
 }
 function libProgress() { if (tab !== 'lib') return; const e = document.querySelector('#libList .lib-wait'); if (e) e.textContent = `Listening for the cleanest recordings… ${pool.filter(x => x.ins).length} checked`; }
 const sentinel = h('li', { class: 'lib-sent', 'aria-hidden': 'true' });
 // Load more only when the person scrolls near the end of the list.
 function nearEnd() { if (tab !== 'lib' || inspecting > 0 || !sentinel.isConnected) return false; const r = sentinel.getBoundingClientRect(); return r.top < innerHeight + 200; }
-let scrolled = false, quietUntil = 0;
-const onScroll = () => { if (performance.now() < quietUntil) return; scrolled = true; if (nearEnd()) moreLib(); };
+let quietUntil = 0;
+let lastMore = 0;
+const onScroll = () => { if (performance.now() < quietUntil) return; if (nearEnd() && performance.now() - lastMore > 1200) { lastMore = performance.now(); moreLib(); } };
 $('studio').addEventListener('scroll', onScroll, { passive: true });
 window.addEventListener('scroll', onScroll, { passive: true });
 function moreLib() {
   const items = libItems();
   if (libShown < items.length) { libShown += 10; renderLib(); }
-  if (items.length < libShown + 10) { if (pool.some(x => !x.ins && !x.insErr && !x.insQueued)) inspectPool(); else if (poolMore) { const g = gen; loadPool(true).then(() => { if (g === gen) inspectPool(); }); } }
+  if (items.length < libShown + 10) {
+    budget = Math.max(budget, checkedCount()) + 24; if (pool.some(x => !x.ins && !x.insErr && !x.insQueued)) inspectPool(); else if (poolMore) { const g = gen; loadPool(true).then(() => { if (g === gen) inspectPool(); }); } }
 }
 function libItems() {
   let l = pool.filter(s => s.ins && (libQ < 0 || (s.ins.label !== 'silent' && s.ins.snr >= libQ)) && (libFilter === 'all' || s.cls === libFilter) && (!libQuery || `${s.sp.commonName} ${s.sp.scientificName} ${s.st?.name} ${s.st?.country}`.toLowerCase().includes(libQuery)));
@@ -106,9 +115,9 @@ export function renderLib() {
     return b;
   }));
   $('libMsg').textContent = !pool.length ? 'Loading recordings from the mics around the pin…'
-    : `Cleanest first · ${done.length} of ${pool.length}${poolMore ? '+' : ''} recordings checked${hidden.length ? `, ${hidden.length} hidden (${silent ? `${silent} near-silent, ` : ''}${hidden.length - silent} too noisy)` : ''}. Click a row to play, ↑↓ to browse, drag onto a kit pad. Scroll for more.`;
+    : `Cleanest first${inspecting > 0 ? ' · checking more…' : ''}${hidden.length ? ` · ${hidden.length} noisy${silent ? ' or silent' : ''} hidden` : ''}. Click to play, ↑↓ to browse, drag onto a pad.`;
   // while the first wave is being checked, wait rather than reshuffle rows under the cursor
-  if (!shown.length || (inspecting > 0 && !list.querySelector('.lib-row'))) {
+  if (!shown.length || (inspecting > 0 && !list.querySelector('.lib-row') && shown.length < 5)) {
     list.replaceChildren(h('li', { class: 'empty lib-wait' }, !pool.length || inspecting > 0 ? `Listening for the cleanest recordings… ${done.length} checked` : 'No sounds pass the quality filter here. Set Quality to Everything, or drop the pin somewhere busier.'));
     updateSelBtn(); return;
   }
@@ -142,8 +151,8 @@ function libRow(s) {
   return row;
 }
 
-export function resetLibrary() { libSel.clear(); libShown = 10; scrolled = false; libCur = null; }
-export function resetScroll() { scrolled = false; quietUntil = performance.now() + 800; }
+export function resetLibrary() { libSel.clear(); libShown = 10; libCur = null; budget = 48; }
+export function resetScroll() { quietUntil = performance.now() + 800; }
 $('libSearch').addEventListener('input', e => { libQuery = e.target.value.trim().toLowerCase(); libShown = 10; renderLib(); });
 $('libSort').addEventListener('change', e => { libSort = e.target.value; libShown = 10; renderLib(); });
 $('libQ').addEventListener('change', e => { libQ = +e.target.value; libShown = 10; renderLib(); });

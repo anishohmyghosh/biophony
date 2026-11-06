@@ -5,7 +5,7 @@ import { $, CLS, EMOJI, ago, cssVar, fmt, h, normCls } from '../core/util.js';
 import { hydros } from '../globe/hydrophones.js';
 import { empty, map, ready, src } from '../globe/map.js';
 import { MIN_N, MIN_S, SBI_WORD, balance, chao1, coverage, diversity, hill1, hill2, median, nGroups, sbiColor } from '../globe/metrics.js';
-import { dropPin } from '../globe/pin.js';
+import { dropPin, pin } from '../globe/pin.js';
 import { stations } from '../globe/stations.js';
 import { meter, meterScale } from './balance.js';
 import { openInfo } from './drawer.js';
@@ -84,7 +84,15 @@ function clipItem(n, s) {
   } : null;
 }
 
+// The Site tab follows the pin: the closest mic's health, a hydrophone's if that is nearer.
+let siteFor = null;
+export function showClosestSite() {
+  if (!pin || siteFor === pin) return;
+  const st = pin.near[0], hy = pin.hydros[0];
+  if (hy && (!st || hy.km < st.km)) openHydro(hy.hy.id); else if (st) openStation(st.st.id);
+}
 export async function openStation(id) {
+  siteFor = pin;
   const tok = ++siteToken, st = stations.get(id);
   siteLoading(st?.name || 'Station');
   let s;
@@ -186,6 +194,7 @@ export async function openStation(id) {
 }
 
 export async function openHydro(fid) {
+  siteFor = pin;
   const tok = ++siteToken, hy = hydros.get(fid);
   if (!hy) return;
   const { a } = hy;
