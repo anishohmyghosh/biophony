@@ -726,7 +726,7 @@ function ensureAudio() {
 }
 function stopHls() { if (hls) { hls.destroy(); hls = null; } }
 function setNow(title, sub) { $('ptitle').textContent = title; $('psub').textContent = sub; }
-function setBusy(on) { $('player').classList.toggle('busy', on); }
+function setBusy(on) { $('player').classList.toggle('busy', on); if (on) setIcon(true); else if (audio.paused && !advancing) setIcon(false); }
 
 async function startClip(d) {
   ensureAudio(); stopHls();
@@ -757,7 +757,7 @@ function setPlaylist(items, mode, start = 0) {
   ensureAudio();
   playIndex(start);
 }
-function advance() { if (advancing || pmode === 'live' || pmode === 'idle') return; advancing = true; setTimeout(() => { advancing = false; playIndex(pi + 1); }, 500); }
+function advance() { if (advancing || pmode === 'live' || pmode === 'idle') return; advancing = true; const tok = ptok; setTimeout(() => { advancing = false; if (tok === ptok) playIndex(pi + 1); }, 500); }
 
 // Tour: the stations in view, from richest to thinnest balance, one recent clip each.
 function startTour() {
@@ -798,10 +798,12 @@ audio.addEventListener('timeupdate', () => { if (clipEnd && audio.currentTime > 
 audio.addEventListener('ended', () => advance());
 audio.addEventListener('playing', () => setBusy(false));
 audio.addEventListener('waiting', () => setBusy(true));
-audio.addEventListener('play', () => { $('icPlay').hidden = true; $('icStop').hidden = false; pbtn.setAttribute('aria-label', 'Pause'); loop(); });
-audio.addEventListener('pause', () => { $('icPlay').hidden = false; $('icStop').hidden = true; pbtn.setAttribute('aria-label', 'Play'); setBusy(false); });
+// SVG elements ignore the .hidden property, so toggle the attribute.
+function setIcon(on) { $('icPlay').toggleAttribute('hidden', on); $('icStop').toggleAttribute('hidden', !on); pbtn.setAttribute('aria-label', on ? 'Pause' : 'Play'); }
+audio.addEventListener('play', () => { setIcon(true); loop(); });
+audio.addEventListener('pause', () => { if (!advancing) setIcon(false); setBusy(false); });
 pbtn.addEventListener('click', () => {
-  if (!audio.paused) { ++ptok; audio.pause(); return; }
+  if (!audio.paused || $('player').classList.contains('busy')) { ++ptok; advancing = false; audio.pause(); setBusy(false); setIcon(false); return; }
   if (pmode === 'idle' || (!audio.src && !hls)) { startTour(); return; }
   ensureAudio();
   if (clipEnd && audio.currentTime > clipEnd - 0.1) { playIndex(pi + 1); return; }
@@ -851,6 +853,10 @@ function loop() {
   };
   raf = requestAnimationFrame(step);
 }
+
+// ---------------- shared with the studio ----------------
+window.biophony = { map, stations, hydros, gql, h, fft, ago, fmt, normCls, CLS, COLORS, sbiColor, hydroStatus,
+  pauseMain: () => { ++ptok; stopHls(); audio.pause(); setBusy(false); setIcon(false); pmode = pmode === 'live' ? 'idle' : pmode; } };
 
 // ---------------- polling + visibility ----------------
 const timers = [];

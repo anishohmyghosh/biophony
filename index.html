@@ -18,6 +18,10 @@
     <h1>Biophony</h1>
     <p class="sub">How balanced the planet sounds, live. <span class="dot" id="liveDot"></span><span id="liveText">connecting…</span></p>
   </div>
+  <button class="btn studio-btn" id="openStudio" title="Build drum kits, sound packs and ambience beds from the region in view">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
+    Field Studio
+  </button>
   <dl class="stats" aria-label="Last 24 hours across the network">
     <div><dt>Recognitions, 24 h</dt><dd id="stDet">–</dd></div>
     <div><dt>Species</dt><dd id="stSpe">–</dd></div>
@@ -131,8 +135,94 @@
   <audio id="audio" crossorigin="anonymous" preload="none"></audio>
 </footer>
 
+
+<div class="studio" id="studio" hidden role="dialog" aria-modal="true" aria-labelledby="stTitle">
+  <div class="st-top">
+    <div class="st-brand">
+      <h2 id="stTitle">Field Studio <span class="beta">experiment</span></h2>
+      <p class="st-region"><span id="stRegion"></span> · <button class="linkish" id="stRebuild">change region on the map</button></p>
+    </div>
+    <div class="st-tabs" role="tablist">
+      <button role="tab" class="st-tab on" data-t="kit" aria-selected="true">Kit</button>
+      <button role="tab" class="st-tab" data-t="lib" aria-selected="false">Library</button>
+      <button role="tab" class="st-tab" data-t="rec" aria-selected="false">Field recorder</button>
+    </div>
+    <button class="btn ghost" id="stClose">← Back to map</button>
+  </div>
+
+  <section class="st-pane" id="st-kit">
+    <p class="st-status" id="kitStatus" role="status"></p>
+    <div class="kit-top">
+      <div class="pads" id="pads"></div>
+      <div class="editor" id="editor"></div>
+    </div>
+    <div class="transport">
+      <button class="btn" id="kPlay" aria-pressed="false">▶ Play</button>
+      <label class="tctl">Style
+        <select id="kStyle"><option>House</option><option>Boom bap</option><option>Breakbeat</option><option>Techno</option><option>Dembow</option><option>Dawn chorus</option></select></label>
+      <button class="btn ghost sm" id="kGen" title="Write a new pattern in this style">✦ Generate</button>
+      <button class="btn ghost sm" id="kMut" title="Change a few steps">Mutate</button>
+      <button class="btn ghost sm" id="kClear">Clear</button>
+      <label class="tctl">Tempo <input type="range" id="kBpm" min="60" max="180" value="96"><output id="kBpmV">96</output></label>
+      <label class="tctl">Swing <input type="range" id="kSwing" min="0" max="45" value="12"><output id="kSwingV">12%</output></label>
+      <span class="grow"></span>
+      <button class="btn ghost sm" id="kNew" title="Pick 8 new sounds from this region">↻ New kit</button>
+    </div>
+    <div class="seq" id="seq"></div>
+    <div class="exports">
+      <span class="lh">Export</span>
+      <button class="btn sm" id="kKit">⤓ Kit (.zip)</button>
+      <button class="btn ghost sm" id="kLoop">⤓ 4-bar loop (.wav)</button>
+      <button class="btn ghost sm" id="kMidi">⤓ Pattern (.mid)</button>
+      <span class="hint">Keys 1–8 play pads · space starts and stops · shift-click a step for an accent</span>
+    </div>
+  </section>
+
+  <section class="st-pane" id="st-lib" hidden>
+    <div class="lib-bar">
+      <input type="search" id="libSearch" placeholder="Search species, station or country" aria-label="Search sounds">
+      <div class="fchips" id="libChips"></div>
+      <label class="tctl">Sort <select id="libSort"><option value="new">Newest</option><option value="conf">Confidence</option><option value="species">Species A–Z</option></select></label>
+      <label class="tctl">Download <select id="libCut"><option value="call">Call only (±0.5 s)</option><option value="full">Full clip</option></select></label>
+      <button class="btn sm" id="libZip" disabled>Select sounds to pack</button>
+    </div>
+    <p class="hint" id="libMsg">Every recording BirdNET recognised in this region, newest first. Amber shading marks the call. Bat recordings keep their ultrasonic sample rate in downloads and play slowed ×10 so you can hear them. ＋ loads a sound onto the selected kit pad.</p>
+    <ul class="lib" id="libList"></ul>
+    <button class="btn ghost" id="libMore" hidden>Load more</button>
+  </section>
+
+  <section class="st-pane" id="st-rec" hidden>
+    <div class="rec">
+      <div class="rec-mics">
+        <h3>Mics</h3>
+        <p class="hint" id="recSel">Choose up to 4 mics</p>
+        <div id="recMics"></div>
+      </div>
+      <div class="rec-opts">
+        <h3>Ambience bed</h3>
+        <p class="hint">Stitches each mic's recent recordings into one continuous bed with crossfades, for film, games, installations or study. Picking a hydrophone records its live stream in real time.</p>
+        <p class="lh">Length</p>
+        <div class="seg" id="recLens"><button data-s="15" aria-pressed="false">15 s</button><button data-s="30" class="on" aria-pressed="true">30 s</button><button data-s="60" aria-pressed="false">1 min</button><button data-s="120" aria-pressed="false">2 min</button><button data-s="300" aria-pressed="false">5 min</button></div>
+        <div class="opt-grid">
+          <label>Channels <select id="recCh"><option value="2">Stereo (mics spread L–R)</option><option value="1">Mono</option></select></label>
+          <label>Bit depth <select id="recBits"><option value="24">48 kHz / 24-bit</option><option value="16">48 kHz / 16-bit</option></select></label>
+          <label>Crossfade <select id="recXf"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></label>
+          <label>Fade in/out <select id="recFade"><option value="0">None</option><option value="1" selected>1 s</option><option value="3">3 s</option></select></label>
+          <label>Peak level <select id="recPeak"><option value="-1">−1 dBFS</option><option value="-3" selected>−3 dBFS</option><option value="-6">−6 dBFS</option></select></label>
+          <label class="chk"><input type="checkbox" id="recHp" checked> Rumble cut (80 Hz high-pass)</label>
+          <label class="chk"><input type="checkbox" id="recLoop"> Seamless loop</label>
+        </div>
+        <button class="btn" id="recGo" disabled>● Build recording</button>
+        <p class="st-status" id="recMsg" role="status"></p>
+        <div id="recOut"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 <script type="module" src="app.js"></script>
+<script type="module" src="studio.js"></script>
 </body>
 </html>
