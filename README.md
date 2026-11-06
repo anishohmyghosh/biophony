@@ -1,4 +1,4 @@
-# Biophony
+# Biophony (beta)
 
 A sound discovery globe for ecologists and sound designers. Drop a pin anywhere and Biophony gathers the nearest always-on acoustic monitors (birds, bats, insects, frogs, mammals, whales), checks every recording for noise and silence, and turns the clean ones into a **Field Studio**:
 
@@ -11,5 +11,7 @@ The globe shows each station's **Soundscape Balance Index** (Hill-number diversi
 - **Listening:** [BirdWeather](https://www.birdweather.com) public GraphQL API and [Orcasound](https://www.orcasound.net) live hydrophones.
 - **Layers:** NASA GIBS, NASA CMR (EMIT), ORNL DAAC (MODIS), UNEP-WCMC (WDPA), Esri basemaps. Globe by MapLibre GL.
 - Static site, no build step and no API keys. Run `python3 -m http.server` and open it.
+
+Live: https://anishohmyghosh.github.io/biophony/
 
 Made by [Anish Ghosh](https://anishohmyghosh.github.io/website/).

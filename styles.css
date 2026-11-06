@@ -496,3 +496,4 @@ body.dragging .pad { border-style: dashed; }
 .ed-toggle[aria-expanded="true"] .ed-arrow { transform: rotate(180deg); }
 .ed-toggle[aria-expanded="true"] { color: var(--ink); }
 .ed-arrow { width: 12px; height: 12px; }
+.beta-tag { font-family: var(--f-body); font-size: .62rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--gold); border: 1px solid #5a4a2a; background: rgba(227,183,101,.08); border-radius: 999px; padding: 2px 8px; vertical-align: middle; position: relative; top: -3px; }
