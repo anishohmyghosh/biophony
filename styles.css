@@ -488,3 +488,4 @@ body.dragging .pad { border-style: dashed; }
 .suggest { padding: 12px 14px; }
 .suggest b { font-size: .88rem; }
 @media (max-width: 640px) { .st-hello { font-size: 1.8rem; } }
+.st-top { align-items: center; } .st-region:empty, .st-region:has(#stRegionSub:empty) { display: none; }

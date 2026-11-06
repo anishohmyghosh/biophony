@@ -76,7 +76,7 @@ function setRegion(pin) {
   region = { ...pin, ids: pin.near.map(o => o.st.id) };
   pool = []; poolCursor = null; poolMore = false; poolBusy = null;
   const n = pin.near.length;
-  $('stRegion').textContent = pin.label;
+  $('stRegion').textContent = pin.label; $('stRegion').hidden = false;
   $('stRegionSub').textContent = n ? `${n} nearest mic${n > 1 ? 's' : ''}, within ${B().kmTxt(pin.radius)}${pin.hydros.length ? ` · ${pin.hydros.length} hydrophone${pin.hydros.length > 1 ? 's' : ''}` : ''}` : 'No mics nearby';
   $('stSite').hidden = !n;
 }
