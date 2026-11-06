@@ -13,7 +13,7 @@ export const TX = s => isUltra(s) ? 10 : 1;          // time expansion for bat r
 export let region = null, pool = [], poolCursor = null, poolMore = false, poolBusy = null, gen = 0, widenDone = -1;
 export function resetPool() { pool = []; poolCursor = null; poolMore = false; poolBusy = null; }
 // Once the circle can't widen any further for this pin, stop asking.
-export const markWidened = () => { markWidened(); };
+export const markWidened = () => { widenDone = gen; };
 export function setRegion(pin) {
   gen++;
   region = { ...pin, ids: pin.near.map(o => o.st.id) };

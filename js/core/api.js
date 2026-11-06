@@ -7,13 +7,17 @@ export const GIBS = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best';
 export const DAY = { count: 1, unit: 'day' };
 
 // BirdWeather is free and rate-limits each network. All requests go through one queue
-// (at most 4 at a time); if it says "retry after N seconds", everything waits and then carries on.
-let gqlActive = 0, pausedUntil = 0;
-const gqlQueue = [];
+// (at most 6 at a time); if it says "retry after N seconds", everything waits and then carries on.
+// Background jobs (low) get at most 3 of those slots, so pressing play never waits behind them.
+let gqlActive = 0, lowActive = 0, pausedUntil = 0;
+const hiQueue = [], lowQueue = [];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-function gqlNext() { while (gqlActive < 4 && gqlQueue.length) { gqlActive++; gqlQueue.shift()(); } }
+function gqlNext() {
+  while (gqlActive < 6 && hiQueue.length) { gqlActive++; hiQueue.shift()(); }
+  while (gqlActive < 6 && lowActive < 3 && lowQueue.length) { gqlActive++; lowActive++; lowQueue.shift()(); }
+}
 export async function gql(query, variables = {}, low = false) {
-  await new Promise(r => { low ? gqlQueue.push(r) : gqlQueue.unshift(r); gqlNext(); });
+  await new Promise(r => { (low ? lowQueue : hiQueue).push(r); gqlNext(); });
   try {
     for (let attempt = 0; ; attempt++) {
       if (Date.now() < pausedUntil) await sleep(pausedUntil - Date.now());
@@ -29,6 +33,6 @@ export async function gql(query, variables = {}, low = false) {
       if (j.errors) throw new Error(msg);
       return j.data;
     }
-  } finally { gqlActive--; gqlNext(); }
+  } finally { gqlActive--; if (low) lowActive--; gqlNext(); }
 }
 export const getJSON = async url => { const r = await fetch(url); if (!r.ok) throw new Error(r.status + ' ' + url); return r.json(); };

@@ -46,8 +46,18 @@ function unlock() {
 }
 ['pointerdown', 'keydown', 'touchend'].forEach(t => document.addEventListener(t, unlock, { capture: true, passive: true }));
 const real = () => !unlocking && audio.currentSrc !== SILENT;   // ignore events from the silent unlock clip
-// A new pin resets the tour (a live hydrophone keeps playing).
-export function onPin() { if (pmode !== 'live') { pmode = 'idle'; pnext.disabled = true; } }
+// A new pin stops the old pin's clips (a live hydrophone keeps playing). If something was
+// playing, the tour carries straight on with the new pin's mics. An automatic widening of the
+// same pin (auto) leaves the current tour alone.
+export function onPin(auto = false) {
+  if (pmode === 'live' || auto) return;
+  const wasOn = advancing || (!audio.paused && real()) || $('player').classList.contains('busy');
+  const tok = ++ptok; advancing = false; clipEnd = null;
+  if (!audio.paused) audio.pause();
+  setBusy(false); setIcon(false); pmode = 'idle'; pnext.disabled = true; pi = -1;
+  // next tick, so a hydrophone click (pin + playHydro in one handler) wins
+  if (wasOn) setTimeout(() => { if (pmode === 'idle' && tok === ptok) startTour(); }, 0);
+}
 export function setNow(title, sub) { $('ptitle').textContent = title; $('psub').textContent = sub; }
 // One place decides the play/pause look: a class on the player swaps the icons in CSS.
 function setIcon(on) { $('player').classList.toggle('playing', on); pbtn.setAttribute('aria-label', on ? 'Pause' : 'Play'); pbtn.setAttribute('aria-pressed', on); }
@@ -92,7 +102,7 @@ function startTour() {
     if (all.length > 30) { const step = all.length / 30; all = Array.from({ length: 30 }, (_, i) => all[Math.floor(i * step)]); }
     list = all.map(st => ({ st, note: `balance ${st.bal.sbi}` }));
   }
-  if (!list.length) { setNow('Soundscape tour', 'Still gathering station data, try again in a moment'); return; }
+  if (!list.length) { setNow(around ? 'Around the pin' : 'Soundscape tour', around ? 'No mics near the pin, try somewhere on land' : 'Still gathering station data, try again in a moment'); return; }
   if (around) {
     // one request for every mic around the pin, then one recent clip per mic, nearest first
     ensureAudio(); setBusy(true); pmode = 'tour'; const tok = ++ptok;

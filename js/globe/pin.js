@@ -60,7 +60,7 @@ export function dropPin(lat, lon, auto = false) {
     src('pinarea').setData(radius ? { type: 'FeatureCollection', features: [circle(lat, lon, Math.max(1, radius))] } : empty());
   });
   setNow('Around the pin', `${pin.label} · press play to hear the ${near.length} nearest mics`);
-  onPin();
+  onPin(auto);
   pin.auto = auto; pin.autoN = pinAuto;
   window.dispatchEvent(new CustomEvent('biophony:pin', { detail: pin }));
 }
