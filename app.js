@@ -320,7 +320,7 @@ function placeLabel(list) {
   if (c[0][1] >= list.length * 0.7) return s.length && s[0][1] >= list.length * 0.5 ? `${s[0][0]}, ${c[0][0]}` : c[0][0];
   return c.slice(0, 2).map(x => x[0]).join(' & ');
 }
-function dropPin(lat, lon, fly = true) {
+function dropPin(lat, lon, auto = false) {
   const near = [...stations.values()].map(st => ({ st, km: km(lat, lon, st.lat, st.lon) })).sort((a, b) => a.km - b.km).slice(0, pinN);
   const hy = [...hydros.values()].map(x => ({ hy: x, km: km(lat, lon, x.lat, x.lon) })).filter(o => o.km < 250).sort((a, b) => a.km - b.km);
   const radius = near.length ? near.at(-1).km : 0;
@@ -330,17 +330,16 @@ function dropPin(lat, lon, fly = true) {
     pinMarker.setLngLat([lon, lat]).addTo(map);
     map.setFilter('sel', ['in', ['get', 'id'], ['literal', near.map(o => o.st.id)]]);
     src('pinarea').setData(radius ? { type: 'FeatureCollection', features: [circle(lat, lon, Math.max(1, radius))] } : empty());
-    if (fly && near.length) {
-      const b = new maplibregl.LngLatBounds([lon, lat], [lon, lat]); near.forEach(o => b.extend([o.st.lon, o.st.lat]));
-      map.fitBounds(b, { padding: 70, maxZoom: 9.5, duration: 1300 });
-    }
   });
   $('pinHint').hidden = true;
   setNow('Around the pin', `${pin.label} · press play to hear the ${near.length} nearest mics`);
   if (pmode !== 'live') { pmode = 'idle'; pnext.disabled = true; }
+  pin.auto = auto;
   window.dispatchEvent(new CustomEvent('biophony:pin', { detail: pin }));
 }
-function repin(n) { pinN = n; if (pin) dropPin(pin.lat, pin.lon, false); }
+function repin(n) { pinN = n; if (pin) dropPin(pin.lat, pin.lon); }
+// Thin area: double the number of mics (up to 48) and widen the circle. Returns false when already at the limit.
+function expandPin() { if (!pin || pinN >= 48) return false; pinN = Math.min(48, pinN * 2); dropPin(pin.lat, pin.lon, true); return true; }
 
 // ---------------- balance pane (in the Balance & info drawer) ----------------
 const balEl = $('bal');
@@ -951,7 +950,7 @@ function loop() {
 }
 
 // ---------------- shared with the studio ----------------
-window.biophony = { map, stations, hydros, gql, h, fft, ago, fmt, km, kmTxt, normCls, CLS, COLORS, sbiColor, hydroStatus, pauseMain, dropPin, repin, openStation, openInfo, median,
+window.biophony = { map, stations, hydros, gql, h, fft, ago, fmt, km, kmTxt, normCls, CLS, COLORS, sbiColor, hydroStatus, pauseMain, dropPin, repin, expandPin, openStation, openInfo, median,
   get pin() { return pin; }, get analysing() { return analysing; } };
 
 // ---------------- polling + visibility ----------------
