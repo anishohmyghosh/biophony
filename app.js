@@ -822,21 +822,25 @@ function stopHls() { if (hls) { hls.destroy(); hls = null; } }
 // Safari only lets audio start inside a click, and clips here start after a network fetch.
 // So on the first click anywhere, resume the audio graph and play the <audio> element once
 // (silently); after that Safari lets the same element play whenever we ask.
-const SILENT = 'data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQgAAAAAAAAAAAAAAA==';
+// A quarter second of silence as a WAV, built in code (used to unlock audio in Safari).
+const SILENT = (() => {
+  const n = 2000, b = new DataView(new ArrayBuffer(44 + n * 2)), w = (o, s) => [...s].forEach((c, i) => b.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); b.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt '); b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true);
+  b.setUint32(24, 8000, true); b.setUint32(28, 16000, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true); w(36, 'data'); b.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+})();
 let unlocked = false, unlocking = false;
 function unlock() {
   ensureAudio();
-  if (unlocked) return;
-  unlocked = true;
-  if (audio.paused && !audio.getAttribute('src')) {
-    // play() inside the gesture is what Safari remembers; pause straight away so nothing is left "playing"
-    unlocking = true; audio.src = SILENT;
-    audio.play().catch(() => {}); audio.pause();
-    setTimeout(() => { if (audio.getAttribute('src') === SILENT) { audio.removeAttribute('src'); audio.load(); $('player').classList.remove('busy', 'playing'); } unlocking = false; }, 300);
-  }
+  if (unlocked || unlocking || !audio.paused || audio.getAttribute('src')) return;
+  // play() inside the gesture is what Safari remembers. Keep trying on each gesture until it succeeds.
+  unlocking = true; audio.src = SILENT;
+  const done = ok => { if (audio.getAttribute('src') === SILENT) { audio.pause(); audio.removeAttribute('src'); audio.load(); $('player').classList.remove('busy', 'playing'); } if (ok) unlocked = true; setTimeout(() => { unlocking = false; }, 50); };
+  const pr = audio.play();
+  if (pr) pr.then(() => done(true), () => done(false)); else done(true);
 }
 ['pointerdown', 'keydown', 'touchend'].forEach(t => document.addEventListener(t, unlock, { capture: true, passive: true }));
-const real = () => !unlocking && !(audio.currentSrc || '').startsWith('data:');   // ignore events from the silent unlock clip
+const real = () => !unlocking && audio.currentSrc !== SILENT;   // ignore events from the silent unlock clip
 function setNow(title, sub) { $('ptitle').textContent = title; $('psub').textContent = sub; }
 // One place decides the play/pause look: a class on the player swaps the icons in CSS.
 function setIcon(on) { $('player').classList.toggle('playing', on); pbtn.setAttribute('aria-label', on ? 'Pause' : 'Play'); pbtn.setAttribute('aria-pressed', on); }
@@ -989,7 +993,7 @@ function loop() {
 
 // ---------------- shared with the studio ----------------
 window.biophony = { map, stations, hydros, gql, h, fft, ago, fmt, km, kmTxt, normCls, CLS, COLORS, sbiColor, hydroStatus, pauseMain, dropPin, repin, expandPin, openStation, openInfo, median,
-  get pin() { return pin; }, get analysing() { return analysing; }, get playerLevel() { return level; } };
+  SILENT, get pin() { return pin; }, get analysing() { return analysing; }, get playerLevel() { return level; } };
 
 // ---------------- polling + visibility ----------------
 const timers = [];

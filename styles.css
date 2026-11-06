@@ -497,3 +497,25 @@ body.dragging .pad { border-style: dashed; }
 .ed-toggle[aria-expanded="true"] { color: var(--ink); }
 .ed-arrow { width: 12px; height: 12px; }
 .beta-tag { font-family: var(--f-body); font-size: .62rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--gold); border: 1px solid #5a4a2a; background: rgba(227,183,101,.08); border-radius: 999px; padding: 2px 8px; vertical-align: middle; position: relative; top: -3px; }
+/* The sequencer and pads adapt to the studio panel's own width, so nothing runs off the edge. */
+.studio { container-type: inline-size; }
+.seq { overflow-x: visible; }
+.seq .grid { min-width: 0; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 3px; }
+.seq .col { gap: 4px; padding: 1px; }
+.cell { min-width: 0; }
+@container (max-width: 760px) {
+  .seq { grid-template-columns: 128px minmax(0, 1fr); padding: 10px; }
+  .rs { grid-template-columns: minmax(0, 1fr) 20px 20px; }
+  .rs .knob.xs { display: none; }
+  .rs-name small { display: none; }
+  .transport { gap: 8px; }
+  .tctl input[type=range] { width: 84px; }
+}
+@container (max-width: 560px) {
+  .pads { grid-template-columns: repeat(2, 1fr); }
+  .seq { grid-template-columns: 92px minmax(0, 1fr); }
+  .rs { grid-template-columns: minmax(0, 1fr) 18px; }
+  .rs-t.s { display: none; }
+  .seq .grid { gap: 2px; }
+}
+@media (max-width: 1280px) and (min-width: 961px) { .layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); } }

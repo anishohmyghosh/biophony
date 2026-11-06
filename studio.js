@@ -1,6 +1,5 @@
 // Field Studio: kits, a sound library and an ambience recorder built from the mics around the pin.
 const B = () => window.biophony;
-const SILENT = 'data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQgAAAAAAAAAAAAAAA==';
 const $ = id => document.getElementById(id);
 const h = (...a) => B().h(...a);
 const COL = c => B().COLORS[c] || B().COLORS.bird;
@@ -996,7 +995,7 @@ function previewStation(st, btn, row) {
 }
 function previewHydro(hy, btn, row) {
   const el = new Audio(); el.crossOrigin = 'anonymous';
-  el.src = SILENT; el.play().catch(() => {});          // claim the click for this element (Safari)
+  el.src = B().SILENT; el.play().catch(() => {});          // claim the click for this element (Safari)
   return startMon(btn, row, async () => {
     if (!(await B().hydroStatus(hy))) throw new Error('offline');
     audioCtx();
@@ -1107,7 +1106,7 @@ async function buildBed() {
 async function recordHydro(hy, secs, msg) {
   if (!hy) throw new Error('hydrophone not found');
   const el = new Audio(); el.crossOrigin = 'anonymous';
-  el.src = SILENT; el.play().catch(() => {});          // claim the click for this element (Safari)
+  el.src = B().SILENT; el.play().catch(() => {});          // claim the click for this element (Safari)
   const live = await B().hydroStatus(hy); if (!live) throw new Error('this hydrophone is offline right now');
   audioCtx();
   let hls = null;
