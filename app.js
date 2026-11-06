@@ -1,4 +1,4 @@
-// Biophony: live acoustic monitors + NASA views, all from free, keyless public APIs.
+// Biophony: a sound discovery globe. Free, keyless public data only.
 const BW = 'https://app.birdweather.com/graphql';
 const ORCA = 'https://live.orcasound.net/api/json';
 const CMR = 'https://cmr.earthdata.nasa.gov/search/granules.json';
@@ -31,6 +31,8 @@ function ago(t) {
 const normCls = c => (c === 'avian' || !c) ? 'bird' : c;
 const cssVar = c => `var(--${c in CLS ? c : 'bird'})`;
 const COLORS = { bird: '#e3b765', bat: '#b59cf0', insect: '#a7d36a', amphibian: '#5fc7a0', mammal: '#e58c6a', whale: '#6fb3ff' };
+const km = (a, b, c, d) => { const r = Math.PI / 180, x = Math.sin((c - a) * r / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin((d - b) * r / 2) ** 2; return 12742 * Math.asin(Math.sqrt(x)); };
+const kmTxt = d => d < 1 ? '<1 km' : d < 10 ? d.toFixed(1) + ' km' : Math.round(d) + ' km';
 
 async function gql(query, variables = {}) {
   const r = await fetch(BW, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, variables }) });
@@ -40,37 +42,90 @@ async function gql(query, variables = {}) {
 }
 const getJSON = async url => { const r = await fetch(url); if (!r.ok) throw new Error(r.status + ' ' + url); return r.json(); };
 
-// ---------------- map ----------------
-const map = L.map('map', { preferCanvas: true, worldCopyJump: true, minZoom: 2, zoomSnap: 0.5, attributionControl: true }).setView([30, -40], 2.5);
-map.attributionControl.setPrefix(false);
-const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas';
-L.tileLayer(`${ESRI}/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 16, attribution: 'Basemap © Esri, HERE, Garmin, OpenStreetMap contributors' }).addTo(map);
-map.createPane('labels'); map.getPane('labels').style.zIndex = 450; map.getPane('labels').style.pointerEvents = 'none';
-map.createPane('sat'); map.getPane('sat').style.zIndex = 250;
-L.tileLayer(`${ESRI}/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 16, pane: 'labels', opacity: 0.8 }).addTo(map);
-const renderer = L.canvas({ padding: 0.3 });
-
+// ---------------- globe ----------------
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
 const isoDay = d => new Date(Date.now() - d * 864e5).toISOString().slice(0, 10);
-const SAT = {
-  ndvi: { url: `${GIBS}/MODIS_Terra_NDVI_8Day/default/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png`, max: 9, op: 0.75,
-    legend: ['Vegetation greenness (NDVI)', 'linear-gradient(90deg,#8c6239,#d9c27a,#9fcf6b,#3f9a3c,#0b4f1c)', 'bare / stressed', 'dense, healthy'] },
-  chl: { url: `${GIBS}/OCI_PACE_Chlorophyll_a/default/${isoDay(2)}/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png`, max: 7, op: 0.85,
-    legend: [`Chlorophyll-a, ${isoDay(2)} (log scale)`, 'linear-gradient(90deg,#3b0f70,#2c5fbf,#21a0a6,#7ccf5a,#f5d33b,#d7301f)', 'clear, low', 'bloom, high'] },
-  true: { url: `${GIBS}/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`, max: 9, op: 1, legend: null },
+const gibs = (layer, time, level, ext = 'png') => `${GIBS}/${layer}/default/${time}/GoogleMapsCompatible_Level${level}/{z}/{y}/{x}.${ext}`;
+// Base layers sit under the stations, dimmed and desaturated so the dots stay readable.
+const BASES = {
+  eco: { url: gibs('MODIS_Combined_L3_IGBP_Land_Cover_Type_Annual', 'default', 8), max: 8, legend: 'MODIS_IGBP_Land_Cover_Type', attr: 'NASA MODIS MCD12Q1 via GIBS' },
+  anthro: { url: gibs('Anthropogenic_Biomes_of_the_World_2001-2006', 'default', 7), max: 7, legend: 'Anthropogenic_Biomes_of_the_World_2001-2006', attr: 'Anthromes v1, Ellis & Ramankutty 2008, NASA SEDAC via GIBS' },
+  ndvi: { url: gibs('MODIS_Terra_NDVI_8Day', 'default', 9), max: 9, legend: 'MODIS_NDVI', attr: 'NASA MODIS via GIBS' },
+  canopy: { url: gibs('GEDI_ISS_L3_Canopy_Height_Mean_RH100_201904-202303', 'default', 7), max: 7, legend: 'GEDI_RH100_Mean_Color_Index', attr: 'NASA GEDI lidar via GIBS' },
+  night: { url: gibs('VIIRS_Black_Marble', '2016-01-01', 8), max: 8, legend: null, attr: 'NASA Black Marble via GIBS' },
+  foot: { url: gibs('Human_Footprint_1995-2004', 'default', 7), max: 7, legend: 'Human_Footprint_1995-2004', attr: 'Human Footprint v2, WCS & CIESIN via GIBS' },
+  true: { url: gibs('VIIRS_SNPP_CorrectedReflectance_TrueColor', isoDay(1), 9, 'jpg'), max: 9, legend: null, attr: 'NASA VIIRS via GIBS' },
 };
-let satLayer = null;
-document.querySelectorAll('input[name=sat]').forEach(r => r.addEventListener('change', () => {
-  if (satLayer) { map.removeLayer(satLayer); satLayer = null; }
-  const s = SAT[r.value], lg = $('legend');
-  lg.hidden = true; lg.replaceChildren();
+const WDPA = 'https://data-gis.unep-wcmc.org/server/rest/services/ProtectedSites/The_World_Database_of_Protected_Areas/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image';
+const LO = [212, 104, 63], MID = [123, 133, 132], HI = [42, 169, 139];
+const rgb = a => `rgb(${a.join(',')})`;
+const empty = () => ({ type: 'FeatureCollection', features: [] });
+const raster = (tiles, max, attribution) => ({ type: 'raster', tiles: [tiles], tileSize: 256, maxzoom: max, ...(attribution ? { attribution } : {}) });
+const DIM = { 'raster-opacity': 0.62, 'raster-saturation': -0.35, 'raster-brightness-max': 0.72, 'raster-contrast': -0.1 };
+
+const map = new maplibregl.Map({
+  container: 'map', center: [-40, 28], zoom: 1.6, minZoom: 0.8, maxZoom: 14, attributionControl: { compact: true },
+  style: {
+    version: 8, projection: { type: 'globe' },
+    sky: { 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 7, 0] },
+    sources: {
+      base: raster(`${ESRI}/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}`, 16, 'Basemap © Esri, HERE, Garmin, OpenStreetMap contributors'),
+      labels: raster(`${ESRI}/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}`, 16),
+      shade: raster(`${ESRI}/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}`, 13, 'Hillshade © Esri'),
+      wdpa: raster(WDPA, 14, 'Protected areas: UNEP-WCMC & IUCN, WDPA'),
+      stations: { type: 'geojson', data: empty() },
+      grid: { type: 'geojson', data: empty() },
+      hydros: { type: 'geojson', data: empty() },
+      pinarea: { type: 'geojson', data: empty() },
+      emit: { type: 'geojson', data: empty() },
+      now: { type: 'geojson', data: empty() },
+    },
+    layers: [
+      { id: 'bg', type: 'background', paint: { 'background-color': '#0a1112' } },
+      { id: 'base', type: 'raster', source: 'base' },
+      { id: 'shade', type: 'raster', source: 'shade', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.28 } },
+      { id: 'wdpa', type: 'raster', source: 'wdpa', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.5, 'raster-saturation': -0.3 } },
+      { id: 'labels', type: 'raster', source: 'labels', paint: { 'raster-opacity': 0.75 } },
+      { id: 'grid', type: 'fill', source: 'grid', layout: { visibility: 'none' }, paint: { 'fill-color': ['get', 'c'], 'fill-opacity': ['get', 'o'], 'fill-outline-color': '#0b1314' } },
+      { id: 'emit', type: 'line', source: 'emit', paint: { 'line-color': '#e3b765', 'line-width': 1.5, 'line-dasharray': [3, 3] } },
+      { id: 'pinarea', type: 'fill', source: 'pinarea', paint: { 'fill-color': '#e9efe9', 'fill-opacity': 0.05 } },
+      { id: 'pinline', type: 'line', source: 'pinarea', paint: { 'line-color': '#e9efe9', 'line-opacity': 0.5, 'line-width': 1, 'line-dasharray': [2, 2] } },
+      { id: 'stations', type: 'circle', source: 'stations', paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, ['case', ['has', 's'], 2.2, 1.3], 5, ['case', ['has', 's'], 4, 2.4], 10, ['case', ['has', 's'], 6.5, 4]],
+        'circle-color': ['case', ['has', 's'], ['interpolate', ['linear'], ['get', 's'], 0, rgb(LO), 50, rgb(MID), 100, rgb(HI)], '#56625f'],
+        'circle-opacity': ['case', ['has', 's'], 0.95, 0.55],
+        'circle-stroke-color': '#071011', 'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 1, 0.3, 6, 0.9] } },
+      { id: 'sel', type: 'circle', source: 'stations', filter: ['in', ['get', 'id'], ['literal', []]], paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 4.5, 6, 7.5, 10, 10], 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#e9efe9', 'circle-stroke-width': 1.6 } },
+      { id: 'hydros', type: 'circle', source: 'hydros', paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 3.5, 8, 8], 'circle-color': ['case', ['get', 'live'], 'rgba(111,179,255,0.35)', 'rgba(143,165,162,0.15)'],
+        'circle-stroke-color': ['case', ['get', 'live'], '#6fb3ff', '#8fa5a2'], 'circle-stroke-width': 2 } },
+      { id: 'now', type: 'circle', source: 'now', paint: { 'circle-radius': 11, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#e3b765', 'circle-stroke-width': 2 } },
+    ],
+  },
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+const ready = new Promise(r => map.once('load', r));
+const src = id => map.getSource(id);
+const inB = (b, lat, lon) => b.contains([lon, lat]);
+
+let baseKey = 'none';
+function setBase(k) {
+  baseKey = k;
+  if (map.getLayer('sat')) map.removeLayer('sat');
+  if (map.getSource('sat')) map.removeSource('sat');
+  const s = BASES[k], lg = $('legend');
+  lg.replaceChildren(); lg.hidden = true;
   if (!s) return;
-  satLayer = L.tileLayer(s.url, { pane: 'sat', maxNativeZoom: s.max, maxZoom: 16, opacity: s.op, attribution: 'NASA GIBS' }).addTo(map);
-  if (s.legend) {
-    const [t, g, a, b] = s.legend;
-    lg.append(h('div', {}, t), h('div', { class: 'bar', style: `background:${g}` }), h('div', { class: 'ends' }, h('span', {}, a), h('span', {}, b)));
-    lg.hidden = false;
-  }
-}));
+  map.addSource('sat', raster(s.url, s.max, s.attr));
+  map.addLayer({ id: 'sat', type: 'raster', source: 'sat', paint: k === 'true' ? { ...DIM, 'raster-opacity': 0.75 } : k === 'night' ? { 'raster-opacity': 0.7, 'raster-saturation': -0.6, 'raster-brightness-max': 0.8 } : DIM }, 'shade');
+  if (s.legend) { lg.append(h('img', { src: `https://gibs.earthdata.nasa.gov/legends/${s.legend}_H.svg`, alt: '', onerror: () => { lg.hidden = true; } })); lg.hidden = false; }
+}
+document.querySelectorAll('input[name=sat]').forEach(r => r.addEventListener('change', () => ready.then(() => setBase(r.value))));
+const vis = (id, on) => ready.then(() => map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'));
+$('lyWdpa').addEventListener('change', e => vis('wdpa', e.target.checked));
+$('lyShade').addEventListener('change', e => vis('shade', e.target.checked));
+$('lyHydro').addEventListener('change', e => vis('hydros', e.target.checked));
 
 // ---------------- ecological metrics ----------------
 // Detection counts per species over 24 h are the abundance proxy (calls, not individuals).
@@ -94,7 +149,6 @@ const chao1 = m => !m.N ? 0 : m.S + ((m.N - 1) / m.N) * (m.f1 * (m.f1 - 1)) / (2
 const nGroups = m => { let k = 0, x = m.mask; while (x) { k += x & 1; x >>= 1; } return k; };
 const eligible = m => m && m.N >= MIN_N && m.S >= MIN_S;
 
-// Latitude-band reference distributions of Hill q1, so a boreal site isn't judged against the tropics.
 let bands = new Map();
 function buildBands() {
   bands = new Map();
@@ -121,8 +175,6 @@ function balance(lat, m) {
   return { sbi: Math.round(100 * (0.5 * P.p + 0.35 * E + 0.15 * B)), D: P.p, E, B, ref: P };
 }
 const SBI_WORD = v => v >= 65 ? 'Rich' : v >= 50 ? 'Balanced' : v >= 35 ? 'Thin' : 'Low';
-// Diverging scale: rust (low) -> neutral grey (50) -> teal (high). Poles validated for CVD on the dark surface.
-const LO = [212, 104, 63], MID = [123, 133, 132], HI = [42, 169, 139];
 function sbiColor(v) {
   const t = Math.max(0, Math.min(100, v)) / 100, [a, b, u] = t < 0.5 ? [LO, MID, t * 2] : [MID, HI, (t - 0.5) * 2];
   return `rgb(${a.map((c, i) => Math.round(c + (b[i] - c) * u)).join(',')})`;
@@ -131,21 +183,12 @@ const median = a => { if (!a.length) return null; const s = [...a].sort((x, y) =
 const quant = (a, q) => { const s = [...a].sort((x, y) => x - y); if (!s.length) return null; const i = (s.length - 1) * q, lo = Math.floor(i); return s[lo] + (s[Math.min(s.length - 1, lo + 1)] - s[lo]) * (i - lo); };
 
 // ---------------- BirdWeather stations ----------------
-const stations = new Map();          // id -> {id, lat, lon, name, continent, country, state, marker, m, bal}
-const stationLayer = L.layerGroup();
-const gridLayer = L.layerGroup().addTo(map);
-let viewMode = 'grid';
+const stations = new Map();          // id -> {id, lat, lon, name, continent, country, state, m, bal}
+let viewMode = 'sites';
 function addStation(s) {
   if (!s.coords) return null;
   let st = stations.get(s.id);
-  if (!st) {
-    const m = L.circleMarker([s.coords.lat, s.coords.lon], { renderer, radius: 2.2, stroke: false, fillColor: '#4a5655', fillOpacity: 0.5 });
-    st = { id: s.id, lat: s.coords.lat, lon: s.coords.lon, marker: m, m: null, bal: null };
-    m.on('click', () => openStation(st.id, true));
-    m.bindTooltip(() => `${st.name}${st.bal ? ` · balance ${st.bal.sbi}` : ''}`, { direction: 'top', offset: [0, -4] });
-    stationLayer.addLayer(m);
-    stations.set(s.id, st);
-  }
+  if (!st) { st = { id: s.id, lat: s.coords.lat, lon: s.coords.lon, m: null, bal: null }; stations.set(s.id, st); }
   st.name = s.name ?? st.name; st.continent = s.continent ?? st.continent; st.country = s.country ?? st.country; st.state = s.state ?? st.state;
   return st;
 }
@@ -159,13 +202,10 @@ async function loadStations() {
   }
 }
 
-// Metrics come from per-station species counts, fetched in geographic shards in parallel (view first).
 const MQ = `query($ne:InputLocation,$sw:InputLocation,$after:String,$p:InputDuration){ stations(first:500, after:$after, period:$p, ne:$ne, sw:$sw){ pageInfo{hasNextPage endCursor} nodes{ id name continent country state coords{lat lon} topSpecies(limit:100, period:$p){ count species{ classification } } } } }`;
 const CACHE_KEY = 'biophony-metrics-v1', CACHE_MS = 40 * 60e3;
 let analysed = 0, analysing = false, lastRun = 0;
-function setMetrics(st, top) {
-  st.m = diversity(top.map(x => ({ n: x.count, c: normCls(x.species?.classification) })));
-}
+function setMetrics(st, top) { st.m = diversity(top.map(x => ({ n: x.count, c: normCls(x.species?.classification) }))); }
 function shards() {
   const out = [], lats = [[-90, 0], [0, 30], [30, 42], [42, 52], [52, 90]];
   for (let lon = -180; lon < 180; lon += 30) for (const [s, n] of lats) out.push({ sw: { lat: s, lon }, ne: { lat: n, lon: lon + 30 } });
@@ -212,45 +252,97 @@ function loadCache() {
   } catch { return false; }
 }
 
-// Rescore + redraw, throttled while data streams in.
 let refreshTimer = null;
-function scheduleRefresh() { if (!refreshTimer) refreshTimer = setTimeout(() => { refreshTimer = null; rescore(); drawGrid(); renderBalance(); }, 900); }
-function rescore() {
-  buildBands();
-  for (const s of stations.values()) {
-    s.bal = balance(s.lat, s.m);
-    s.marker.setStyle(s.bal ? { fillColor: sbiColor(s.bal.sbi), fillOpacity: 0.9, radius: 3.4 } : { fillColor: '#4a5655', fillOpacity: 0.45, radius: 2.2 });
-  }
+function scheduleRefresh() { if (!refreshTimer) refreshTimer = setTimeout(() => { refreshTimer = null; rescore(); drawStations(); drawGrid(); renderBalance(); window.dispatchEvent(new Event('biophony:data')); }, 900); }
+function rescore() { buildBands(); for (const s of stations.values()) s.bal = balance(s.lat, s.m); }
+async function drawStations() {
+  await ready;
+  src('stations').setData({ type: 'FeatureCollection', features: [...stations.values()].map(s => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [s.lon, s.lat] }, properties: s.bal ? { id: s.id, s: s.bal.sbi } : { id: s.id } })) });
 }
-const cellSize = z => z < 3.5 ? 5 : z < 5 ? 2 : z < 6.5 ? 1 : z < 8 ? 0.5 : 0.25;
-function drawGrid() {
-  gridLayer.clearLayers();
-  if (viewMode !== 'grid') return;
-  const cs = cellSize(map.getZoom()), b = map.getBounds().pad(0.3), cells = new Map();
+const cellSize = z => z < 2.5 ? 5 : z < 4 ? 2 : z < 5.5 ? 1 : z < 7 ? 0.5 : 0.25;
+async function drawGrid() {
+  await ready;
+  if (viewMode !== 'grid') { src('grid').setData(empty()); return; }
+  const cs = cellSize(map.getZoom()), cells = new Map();
   for (const s of stations.values()) {
-    if (!s.bal || !b.contains([s.lat, s.lon])) continue;
+    if (!s.bal) continue;
     const k = Math.floor(s.lat / cs) + ',' + Math.floor(s.lon / cs);
     if (!cells.has(k)) cells.set(k, []);
     cells.get(k).push(s.bal.sbi);
   }
-  for (const [k, v] of cells) {
-    const [i, j] = k.split(',').map(Number), med = Math.round(median(v));
-    const r = L.rectangle([[i * cs, j * cs], [(i + 1) * cs, (j + 1) * cs]], { renderer, weight: 1, color: '#0b1314', opacity: 0.9, fillColor: sbiColor(med), fillOpacity: Math.min(0.85, 0.4 + 0.08 * v.length) });
-    r.bindTooltip(`Balance ${med} · ${SBI_WORD(med).toLowerCase()} · ${v.length} station${v.length > 1 ? 's' : ''}`, { sticky: true });
-    r.on('click', () => map.flyToBounds(r.getBounds().pad(0.6), { duration: 0.8 }));
-    gridLayer.addLayer(r);
-  }
+  src('grid').setData({ type: 'FeatureCollection', features: [...cells].map(([k, v]) => {
+    const [i, j] = k.split(',').map(Number), med = Math.round(median(v)), a = j * cs, b = i * cs;
+    return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[a, b], [a + cs, b], [a + cs, b + cs], [a, b + cs], [a, b]]] }, properties: { c: sbiColor(med), o: Math.min(0.85, 0.4 + 0.08 * v.length), med, n: v.length } };
+  }) });
 }
 function setView(v) {
   viewMode = v;
-  if (v === 'grid') { map.removeLayer(stationLayer); gridLayer.addTo(map); }
-  else { gridLayer.clearLayers(); stationLayer.addTo(map); }
-  drawGrid();
+  ready.then(() => { map.setLayoutProperty('grid', 'visibility', v === 'grid' ? 'visible' : 'none'); map.setPaintProperty('stations', 'circle-opacity', v === 'grid' ? 0.25 : ['case', ['has', 's'], 0.95, 0.55]); drawGrid(); });
 }
 document.querySelectorAll('input[name=view]').forEach(r => r.addEventListener('change', () => setView(r.value)));
-map.on('moveend', () => { drawGrid(); renderBalance(); });
+let lastCell = 0;
+map.on('moveend', () => { const c = cellSize(map.getZoom()); if (viewMode === 'grid' && c !== lastCell) drawGrid(); lastCell = c; if (!$('info').hidden) renderBalance(); });
 
-// ---------------- balance pane ----------------
+// ---------------- hover + click ----------------
+const tip = new maplibregl.Popup({ closeButton: false, closeOnClick: false, className: 'tip', offset: 8 });
+function hover(layer, text) {
+  map.on('mousemove', layer, e => { map.getCanvas().style.cursor = 'pointer'; const t = text(e.features[0]); if (t) tip.setLngLat(e.lngLat).setText(t).addTo(map); });
+  map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; tip.remove(); });
+}
+hover('stations', f => { const s = stations.get(f.properties.id); return s ? `${s.name}${s.bal ? ` · balance ${s.bal.sbi}` : ''}` : null; });
+hover('hydros', f => { const hy = hydros.get(f.properties.id); return hy ? `${hy.a.name} · hydrophone${hy.live === false ? ' · offline' : hy.live ? ' · live' : ''}` : null; });
+hover('grid', f => viewMode === 'grid' ? `Balance ${f.properties.med} · ${SBI_WORD(f.properties.med).toLowerCase()} · ${f.properties.n} station${f.properties.n > 1 ? 's' : ''}` : null);
+map.on('click', e => {
+  const pad = 6, box = [[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]];
+  const hy = map.getLayer('hydros') && map.getLayoutProperty('hydros', 'visibility') !== 'none' ? map.queryRenderedFeatures(box, { layers: ['hydros'] })[0] : null;
+  if (hy) { const x = hydros.get(hy.properties.id); dropPin(x.lat, x.lon); playHydro(x.id); return; }
+  const st = map.queryRenderedFeatures(box, { layers: ['stations'] })[0];
+  if (st) { const s = stations.get(st.properties.id); dropPin(s.lat, s.lon); return; }
+  dropPin(e.lngLat.lat, e.lngLat.lng);
+});
+
+// ---------------- the pin: nearest mics around a point ----------------
+let pin = null, pinN = 12, pinMarker = null;
+function circle(lat, lon, r) {
+  const pts = [], R = 6371, d = r / R, la = lat * Math.PI / 180, lo = lon * Math.PI / 180;
+  for (let i = 0; i <= 64; i++) {
+    const b = (i / 64) * 2 * Math.PI, la2 = Math.asin(Math.sin(la) * Math.cos(d) + Math.cos(la) * Math.sin(d) * Math.cos(b));
+    const lo2 = lo + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(la), Math.cos(d) - Math.sin(la) * Math.sin(la2));
+    pts.push([lo2 * 180 / Math.PI, la2 * 180 / Math.PI]);
+  }
+  return { type: 'Feature', geometry: { type: 'Polygon', coordinates: [pts] } };
+}
+function placeLabel(list) {
+  if (!list.length) return 'Open water';
+  const tally = k => { const m = new Map(); list.forEach(x => { const v = x[k]; if (v) m.set(v, (m.get(v) || 0) + 1); }); return [...m.entries()].sort((a, b) => b[1] - a[1]); };
+  const c = tally('country'), s = tally('state');
+  if (!c.length) return 'Unnamed area';
+  if (c[0][1] >= list.length * 0.7) return s.length && s[0][1] >= list.length * 0.5 ? `${s[0][0]}, ${c[0][0]}` : c[0][0];
+  return c.slice(0, 2).map(x => x[0]).join(' & ');
+}
+function dropPin(lat, lon, fly = true) {
+  const near = [...stations.values()].map(st => ({ st, km: km(lat, lon, st.lat, st.lon) })).sort((a, b) => a.km - b.km).slice(0, pinN);
+  const hy = [...hydros.values()].map(x => ({ hy: x, km: km(lat, lon, x.lat, x.lon) })).filter(o => o.km < 250).sort((a, b) => a.km - b.km);
+  const radius = near.length ? near.at(-1).km : 0;
+  pin = { lat, lon, near, hydros: hy, radius, label: placeLabel(near.slice(0, 6).map(o => o.st)) };
+  ready.then(() => {
+    if (!pinMarker) { const el = h('div', { class: 'pin' }, h('i')); pinMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' }); }
+    pinMarker.setLngLat([lon, lat]).addTo(map);
+    map.setFilter('sel', ['in', ['get', 'id'], ['literal', near.map(o => o.st.id)]]);
+    src('pinarea').setData(radius ? { type: 'FeatureCollection', features: [circle(lat, lon, Math.max(1, radius))] } : empty());
+    if (fly && near.length) {
+      const b = new maplibregl.LngLatBounds([lon, lat], [lon, lat]); near.forEach(o => b.extend([o.st.lon, o.st.lat]));
+      map.fitBounds(b, { padding: 70, maxZoom: 9.5, duration: 1300 });
+    }
+  });
+  $('pinHint').hidden = true;
+  setNow('Around the pin', `${pin.label} · press play to hear the ${near.length} nearest mics`);
+  if (pmode !== 'live') { pmode = 'idle'; pnext.disabled = true; }
+  window.dispatchEvent(new CustomEvent('biophony:pin', { detail: pin }));
+}
+function repin(n) { pinN = n; if (pin) dropPin(pin.lat, pin.lon, false); }
+
+// ---------------- balance pane (in the Balance & info drawer) ----------------
 const balEl = $('bal');
 function meter(v, lo, hi) {
   return h('div', { class: 'meter', role: 'img', 'aria-label': `Balance ${v} of 100${lo != null ? `, middle half of stations ${Math.round(lo)} to ${Math.round(hi)}` : ''}` },
@@ -266,7 +358,7 @@ function histogram(vals) {
   const NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('viewBox', `0 0 ${W} ${H + 14}`); svg.setAttribute('class', 'hist'); svg.setAttribute('role', 'img');
   svg.setAttribute('aria-label', 'Distribution of station balance scores: ' + bins.map((n, i) => `${i * 10}–${i * 10 + 10}: ${n}`).join(', '));
-  const tip = h('div', { class: 'hist-tip', hidden: true });
+  const tipEl = h('div', { class: 'hist-tip', hidden: true });
   bins.forEach((n, i) => {
     const bh = Math.max(n ? 2 : 0, (n / mx) * (H - 4)), x = i * bw + 1, y = H - bh;
     const r = document.createElementNS(NS, 'path');
@@ -275,15 +367,15 @@ function histogram(vals) {
     r.setAttribute('fill', sbiColor(i * 10 + 5));
     const hit = document.createElementNS(NS, 'rect');
     Object.entries({ x: i * bw, y: 0, width: bw, height: H, fill: 'transparent' }).forEach(([k, v]) => hit.setAttribute(k, v));
-    hit.addEventListener('mouseenter', () => { tip.hidden = false; tip.textContent = `${n} station${n === 1 ? '' : 's'} scoring ${i * 10}–${i * 10 + 10}`; tip.style.left = `${((i + 0.5) / 10) * 100}%`; r.setAttribute('opacity', '0.75'); });
-    hit.addEventListener('mouseleave', () => { tip.hidden = true; r.removeAttribute('opacity'); });
+    hit.addEventListener('mouseenter', () => { tipEl.hidden = false; tipEl.textContent = `${n} station${n === 1 ? '' : 's'} scoring ${i * 10}–${i * 10 + 10}`; tipEl.style.left = `${((i + 0.5) / 10) * 100}%`; r.setAttribute('opacity', '0.75'); });
+    hit.addEventListener('mouseleave', () => { tipEl.hidden = true; r.removeAttribute('opacity'); });
     svg.append(r, hit);
   });
   const base = document.createElementNS(NS, 'line');
   Object.entries({ x1: 0, x2: W, y1: H + 0.5, y2: H + 0.5, stroke: '#2b4243' }).forEach(([k, v]) => base.setAttribute(k, v));
   svg.append(base);
   [0, 50, 100].forEach(v => { const t = document.createElementNS(NS, 'text'); t.setAttribute('x', (v / 100) * W); t.setAttribute('y', H + 12); t.setAttribute('text-anchor', v === 0 ? 'start' : v === 100 ? 'end' : 'middle'); t.textContent = v; svg.append(t); });
-  return h('div', { class: 'hist-wrap' }, svg, tip);
+  return h('div', { class: 'hist-wrap' }, svg, tipEl);
 }
 function regionKey(inView) {
   const conts = new Set(inView.map(s => s.continent || 'Other'));
@@ -292,17 +384,18 @@ function regionKey(inView) {
   if (ctry.size > 1) return [s => s.country || 'Other', 'country'];
   return [s => s.state || s.country || 'Other', 'region'];
 }
+function flyToStations(list) { const b = new maplibregl.LngLatBounds(); list.forEach(s => b.extend([s.lon, s.lat])); map.fitBounds(b, { padding: 60, maxZoom: 9, duration: 1000 }); }
 let balRaf = 0;
 function renderBalance() {
   cancelAnimationFrame(balRaf);
   balRaf = requestAnimationFrame(() => {
     const b = map.getBounds();
     const all = [...stations.values()].filter(s => s.bal);
-    const inView = all.filter(s => b.contains([s.lat, s.lon]));
+    const inView = all.filter(s => inB(b, s.lat, s.lon));
     const total = +($('stSta').dataset.n || stations.size);
     const prog = analysing ? h('div', { class: 'prog' }, h('div', { class: 'prog-bar', style: `width:${Math.min(100, (analysed / Math.max(total, 1)) * 100)}%` }), h('span', {}, `Analysing stations… ${fmt(analysed)} of ~${fmt(total)}`)) : null;
     if (!inView.length) {
-      balEl.replaceChildren(prog || '', h('p', { class: 'empty' }, all.length ? 'No stations with enough data in this view. Zoom out or pan to a monitored area.' : 'Gathering 24 hours of recognitions from every station…'));
+      balEl.replaceChildren(prog || '', h('p', { class: 'empty' }, all.length ? 'No stations with enough data in this view. Zoom out or turn the globe to a monitored area.' : 'Gathering 24 hours of recognitions from every station…'));
       return;
     }
     const v = inView.map(s => s.bal.sbi), med = Math.round(median(v)), q1 = quant(v, 0.25), q3 = quant(v, 0.75);
@@ -313,7 +406,7 @@ function renderBalance() {
     const groups = new Map(); for (const s of inView) { const k = key(s); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(s); }
     const rows = [...groups.entries()].filter(([, a]) => a.length >= 2).map(([k, a]) => { const sv = a.map(s => s.bal.sbi); return { k, a, n: a.length, med: median(sv), lo: quant(sv, 0.25), hi: quant(sv, 0.75) }; }).sort((x, y) => y.med - x.med).slice(0, 14);
     const lowSites = [...inView].sort((x, y) => x.bal.sbi - y.bal.sbi).slice(0, 3), topSites = [...inView].sort((x, y) => y.bal.sbi - x.bal.sbi).slice(0, 3);
-    const siteBtn = s => h('button', { class: 'site-chip', onclick: () => openStation(s.id, true) }, h('i', { style: `background:${sbiColor(s.bal.sbi)}` }), h('span', {}, s.name), h('b', {}, s.bal.sbi));
+    const siteBtn = s => h('button', { class: 'site-chip', onclick: () => { dropPin(s.lat, s.lon); openStation(s.id); } }, h('i', { style: `background:${sbiColor(s.bal.sbi)}` }), h('span', {}, s.name), h('b', {}, s.bal.sbi));
 
     balEl.replaceChildren(
       prog || '',
@@ -325,27 +418,27 @@ function renderBalance() {
         h('p', { class: 'hint' }, 'The marker is the median; the shaded band covers the middle half of stations.')),
       h('div', { class: 'sec' }, h('h3', {}, 'Distribution', h('small', {}, 'stations by balance score')), histogram(v)),
       h('div', { class: 'metrics m4' },
-        comp('effective species', median(inView.map(s => hill1(s.m))).toFixed(1), 'Median Hill number q=1, exp(H′): the number of equally common species that would give the same diversity'),
+        comp('effective species', median(inView.map(s => hill1(s.m))).toFixed(1), 'Median Hill number q=1, exp(H′)'),
         comp('evenness J′', median(inView.map(s => pielou(s.m))).toFixed(2), 'Median Pielou evenness'),
         comp('multi-taxa sites', Math.round(100 * inView.filter(s => nGroups(s.m) > 1).length / inView.length) + '%', 'Share of stations also hearing insects, frogs, bats or mammals'),
-        comp('sample coverage', Math.round(100 * median(inView.map(s => coverage(s.m)))) + '%', 'Median Good–Turing sample coverage (Chao & Jost 2012): how complete each 24 h sample is')),
+        comp('sample coverage', Math.round(100 * median(inView.map(s => coverage(s.m)))) + '%', 'Median sample coverage (Chao & Jost 2012)')),
       rows.length ? h('div', { class: 'sec' }, h('h3', {}, `By ${level}`, h('small', {}, 'median and middle half')),
-        h('ul', { class: 'regions' }, rows.map(r => h('li', {}, h('button', { onclick: () => map.flyToBounds(L.latLngBounds(r.a.map(s => [s.lat, s.lon])).pad(0.15), { duration: 1 }) },
+        h('ul', { class: 'regions' }, rows.map(r => h('li', {}, h('button', { onclick: () => flyToStations(r.a) },
           h('span', { class: 'r-name' }, r.k, h('small', {}, ` ${r.n}`)),
           h('span', { class: 'r-plot' }, h('i', { class: 'r-iqr', style: `left:${r.lo}%;width:${Math.max(1, r.hi - r.lo)}%` }), h('i', { class: 'r-dot', style: `left:${r.med}%;background:${sbiColor(r.med)}` })),
           h('b', {}, Math.round(r.med))))))) : null,
       h('div', { class: 'sec two' },
         h('div', {}, h('h3', {}, 'Richest here'), ...topSites.map(siteBtn)),
         h('div', {}, h('h3', {}, 'Thinnest here'), ...lowSites.map(siteBtn))),
-      h('p', { class: 'note', style: 'margin-top:16px' }, 'Each station\'s score blends diversity (Hill q1, compared with stations at similar latitude), evenness (Pielou J′) and taxonomic breadth over the last 24 hours. Open a station for its full site health, including soundscape noise and vegetation from NASA MODIS. Methods and references are in About.'),
+      h('p', { class: 'note', style: 'margin-top:16px' }, 'Each station\'s score blends diversity (Hill q1, compared with stations at similar latitude), evenness (Pielou J′) and taxonomic breadth over the last 24 hours. Methods and references are in About.'),
     );
   });
 }
 
 // ---------------- Orcasound hydrophones ----------------
-const hydros = new Map();            // feed id -> {attrs, marker, live}
-const hydroLayer = L.layerGroup().addTo(map);
+const hydros = new Map();            // feed id -> {id, a, lat, lon, live}
 const hydroBase = a => `https://s3-${a.bucket_region || 'us-west-2'}.amazonaws.com/${a.bucket}/${a.node_name}`;
+async function drawHydros() { await ready; src('hydros').setData({ type: 'FeatureCollection', features: [...hydros.values()].map(x => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [x.lon, x.lat] }, properties: { id: x.id, live: x.live !== false } })) }); }
 async function hydroStatus(hy) {
   try {
     const ts = (await (await fetch(`${hydroBase(hy.a)}/latest.txt`, { cache: 'no-store' })).text()).trim();
@@ -354,7 +447,7 @@ async function hydroStatus(hy) {
     const last = [...txt.matchAll(/PROGRAM-DATE-TIME:([^\s]+)/g)].pop()?.[1];
     hy.url = url; hy.last = last; hy.live = !!last && Date.now() - new Date(last) < 10 * 60e3;
   } catch { hy.live = false; }
-  hy.marker.getElement()?.querySelector('.hydro-ic')?.classList.toggle('off', !hy.live);
+  drawHydros();
   return hy.live;
 }
 async function loadHydros() {
@@ -362,25 +455,19 @@ async function loadHydros() {
   for (const f of d.data) {
     const a = f.attributes;
     if (!a.visible || !a.lat_lng) continue;
-    const m = L.marker([a.lat_lng.lat, a.lat_lng.lng], { icon: L.divIcon({ className: '', html: '<div class="hydro-ic"></div>', iconSize: [0, 0] }), keyboard: true, title: a.name });
-    const hy = { id: f.id, a, marker: m, live: null };
-    m.on('click', () => { openHydro(f.id); playHydro(f.id); });
-    m.bindTooltip(() => `${a.name} · hydrophone${hy.live === false ? ' · offline' : hy.live ? ' · live' : ''}`, { direction: 'top', offset: [0, -8] });
-    hydroLayer.addLayer(m);
-    hydros.set(f.id, hy);
+    hydros.set(f.id, { id: f.id, a, lat: a.lat_lng.lat, lon: a.lat_lng.lng, live: null });
   }
+  drawHydros();
   $('stHyd').textContent = hydros.size;
-  Promise.all([...hydros.values()].map(hydroStatus)).then(r => { $('stHyd').textContent = `${r.filter(Boolean).length}/${r.length}`; $('stHyd').title = 'live / total'; });
+  Promise.all([...hydros.values()].map(hydroStatus)).then(r => { $('stHyd').textContent = `${r.filter(Boolean).length}/${r.length}`; $('stHyd').title = 'live / total'; window.dispatchEvent(new Event('biophony:data')); });
 }
-$('lyHydro').addEventListener('change', e => e.target.checked ? hydroLayer.addTo(map) : map.removeLayer(hydroLayer));
 
 function pulse(lat, lon, col) {
-  if (!map.getBounds().pad(0.2).contains([lat, lon])) return;
-  const p = L.marker([lat, lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: '', html: `<div class="pulse" style="--c:${col}"></div>`, iconSize: [0, 0] }) }).addTo(map);
-  setTimeout(() => map.removeLayer(p), 2500);
+  if (!inB(map.getBounds(), lat, lon)) return;
+  const el = h('div', { class: 'pulse', style: `--c:${col}` });
+  const m = new maplibregl.Marker({ element: el }).setLngLat([lon, lat]).addTo(map);
+  setTimeout(() => m.remove(), 2500);
 }
-
-// Faint live pulses: the network is listening, without listing every bird.
 const seen = new Set();
 async function pollPulses() {
   const d = await gql(`{ detections(first:14, confidenceGte:0.7){ nodes{ id station{ id coords{lat lon} } } } }`);
@@ -394,13 +481,19 @@ async function loadCounts() {
   $('stDet').textContent = fmt(d.counts.detections); $('stSpe').textContent = fmt(d.counts.species); $('stSta').textContent = fmt(d.counts.stations); $('stSta').dataset.n = d.counts.stations;
 }
 
-// ---------------- tabs ----------------
+// ---------------- Balance & info drawer ----------------
 function showTab(t) {
   document.querySelectorAll('.tab').forEach(b => { const on = b.dataset.t === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
   document.querySelectorAll('.pane').forEach(p => { p.hidden = p.id !== 'pane-' + t; });
+  if (t === 'balance') renderBalance();
 }
+function openInfo(t) { $('info').hidden = false; document.body.classList.add('info-open'); if (t) showTab(t); else renderBalance(); $('infoClose').focus(); }
+function closeInfo() { $('info').hidden = true; document.body.classList.remove('info-open'); $('openInfo').focus(); }
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => showTab(b.dataset.t)));
-
+$('openInfo').addEventListener('click', () => $('info').hidden ? openInfo() : closeInfo());
+$('infoClose').addEventListener('click', closeInfo);
+$('info').addEventListener('click', e => { if (e.target === $('info')) closeInfo(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('info').hidden) closeInfo(); });
 // ---------------- soundscape indices (computed in the browser from the station's clips) ----------------
 function fft(re, im) {
   const n = re.length;
@@ -475,13 +568,9 @@ async function vegetation(lat, lon) {
 
 // ---------------- site panel ----------------
 const siteEl = $('site');
-let selRing = null, footprint = null, siteToken = 0;
-function selectAt(lat, lon) {
-  if (selRing) map.removeLayer(selRing);
-  selRing = L.circleMarker([lat, lon], { radius: 9, color: '#fff', weight: 2, fill: false, interactive: false }).addTo(map);
-  if (footprint) { map.removeLayer(footprint); footprint = null; }
-}
-function siteLoading(title) { siteEl.replaceChildren(h('div', { class: 'site-head' }, h('h2', {}, title), h('p', {}, 'Loading…'))); showTab('site'); }
+let siteToken = 0;
+function selectAt(lat, lon) { ready.then(() => src('now').setData(lat == null ? empty() : { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [lon, lat] }, properties: {} }] })); }
+function siteLoading(title) { siteEl.replaceChildren(h('div', { class: 'site-head' }, h('h2', {}, title), h('p', {}, 'Loading…'))); openInfo('site'); ready.then(() => src('emit').setData(empty())); }
 const bar = (label, v, txt, hint) => h('div', { class: 'pillar', title: hint || '' },
   h('span', { class: 'pl' }, label),
   h('span', { class: 'pt' }, v != null ? h('i', { style: `width:${Math.max(2, v)}%;background:${sbiColor(v)}` }) : h('i', { class: 'na' })),
@@ -494,10 +583,9 @@ function clipItem(n, s) {
   } : null;
 }
 
-async function openStation(id, autoplay = false) {
+async function openStation(id) {
   const tok = ++siteToken, st = stations.get(id);
   siteLoading(st?.name || 'Station');
-  if (st) { selectAt(st.lat, st.lon); if (map.getZoom() < 5) map.flyTo([st.lat, st.lon], 7, { duration: 1.2 }); }
   let s;
   try {
     s = (await gql(`query($id:ID!,$p:InputDuration){ station(id:$id){ id name type country location coords{lat lon} latestDetectionAt
@@ -506,7 +594,6 @@ async function openStation(id, autoplay = false) {
       detections(first:10, validSoundscape:true){ nodes{ id timestamp confidence species{ commonName scientificName thumbnailUrl classification } soundscape{ url startTime endTime } } } } }`, { id, p: DAY })).station;
   } catch (e) { if (tok === siteToken) siteEl.replaceChildren(h('p', { class: 'empty' }, 'Could not load this station: ' + e.message)); return; }
   if (tok !== siteToken || !s) return;
-  if (!st && s.coords) { selectAt(s.coords.lat, s.coords.lon); map.flyTo([s.coords.lat, s.coords.lon], 7); }
 
   const top = s.topSpecies || [], total = top.reduce((a, x) => a + x.count, 0);
   const m = diversity(top.map(x => ({ n: x.count, c: normCls(x.species.classification) })));
@@ -570,7 +657,6 @@ async function openStation(id, autoplay = false) {
     emitSection(s.coords.lat, s.coords.lon, tok),
     h('div', { class: 'row' }, h('a', { class: 'btn ghost', href: `https://app.birdweather.com/stations/${s.id}`, target: '_blank', rel: 'noopener' }, 'Open on BirdWeather ↗')),
   );
-  if (autoplay && dets.length) setPlaylist(dets.map(n => clipItem(n, s)), 'station');
 
   // async measurements
   const urls = [...new Set(dets.map(n => n.soundscape?.url).filter(Boolean))].slice(0, 6);
@@ -602,22 +688,20 @@ async function openHydro(fid) {
   const tok = ++siteToken, hy = hydros.get(fid);
   if (!hy) return;
   const { a } = hy;
-  selectAt(a.lat_lng.lat, a.lat_lng.lng);
-  if (map.getZoom() < 6) map.flyTo([a.lat_lng.lat, a.lat_lng.lng], 8, { duration: 1.2 });
+  openInfo('site');
   const intro = new DOMParser().parseFromString(a.intro_html || '', 'text/html').body.textContent.replace(/\s+/g, ' ').replace(/\*+[^*]*\*+/g, '').trim();
   const dets = h('ul', { class: 'dets' }, h('li', {}, 'Loading…'));
   const others = [...hydros.values()].filter(x => x.id !== fid && x.live);
   siteEl.replaceChildren(
     h('div', { class: 'site-head' }, h('h2', {}, a.name), h('p', {}, `Orcasound hydrophone · ${a.lat_lng.lat.toFixed(3)}, ${a.lat_lng.lng.toFixed(3)} · `, hy.live === false ? `offline${hy.last ? ', last audio ' + ago(hy.last) : ''}` : 'live')),
     h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => playHydro(fid) }, '▶ Listen live underwater'),
-      hy.live === false && others.length ? h('button', { class: 'btn ghost', onclick: () => { openHydro(others[0].id); playHydro(others[0].id); } }, `Try ${others[0].a.name} (live)`) : null),
+      hy.live === false && others.length ? h('button', { class: 'btn ghost', onclick: () => { dropPin(others[0].lat, others[0].lon); openHydro(others[0].id); playHydro(others[0].id); } }, `Try ${others[0].a.name} (live)`) : null),
     intro ? h('p', { class: 'note', style: 'margin-top:12px' }, intro.length > 420 ? intro.slice(0, 420).replace(/\s\S*$/, '') + '…' : intro) : null,
     h('div', { class: 'sec' }, h('h3', {}, 'Recent reports', h('small', {}, 'listeners + OrcaHello AI')), dets),
-    h('p', { class: 'note', style: 'margin-top:12px' }, 'For water health here, switch the layer to Ocean chlorophyll (PACE): high chlorophyll means more phytoplankton, the base of the food web orcas and salmon depend on, but very high values can mean blooms.'),
+    h('p', { class: 'note', style: 'margin-top:12px' }, 'Hydrophones hear what land mics can\'t: orca and humpback calls, seals, snapping shrimp, and the vessel noise that masks them. In the Field Studio, pick this hydrophone as a mic to record it live.'),
     emitSection(a.lat_lng.lat, a.lat_lng.lng, tok),
     h('div', { class: 'row' }, h('a', { class: 'btn ghost', href: `https://live.orcasound.net/listen/${a.slug}`, target: '_blank', rel: 'noopener' }, 'Open on Orcasound ↗')),
   );
-  showTab('site');
   try {
     const d = await getJSON(`${ORCA}/detections?filter%5Bfeed_id%5D=${encodeURIComponent(fid)}&page%5Blimit%5D=12&sort=-timestamp`);
     if (tok !== siteToken) return;
@@ -662,12 +746,11 @@ function emitSection(lat, lon, tok) {
       const list = h('ul', { class: 'scenes' });
       const pick = (g, btn) => {
         list.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === btn));
-        if (footprint) map.removeLayer(footprint);
-        if (g.poly) { footprint = L.polygon(g.poly, { color: '#e3b765', weight: 1.5, fillOpacity: 0.08, dashArray: '4 4', interactive: false }).addTo(map); map.flyToBounds(footprint.getBounds().pad(0.25), { duration: 1 }); }
+        if (g.poly) { const ring = g.poly.map(([la, lo]) => [lo, la]); src('emit').setData({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] }, properties: {} }] }); const b = new maplibregl.LngLatBounds(); ring.forEach(p => b.extend(p)); map.fitBounds(b, { padding: 60, duration: 1000 }); }
         preview.hidden = false;
         preview.replaceChildren(
           g.browse ? h('img', { src: g.browse, alt: `EMIT reflectance preview, ${g.t.slice(0, 10)}` }) : h('p', {}, 'No preview image for this scene.'),
-          h('p', {}, `False-colour preview in sensor orientation (not north-up), ${g.cloud ?? '?'}% cloud. The full scene holds 285 bands from 380–2500 nm at 60 m: enough to estimate leaf water, pigments, soil minerals and surface water quality. The gold outline on the map is the scene footprint.`),
+          h('p', {}, `False-colour preview in sensor orientation (not north-up), ${g.cloud ?? '?'}% cloud. The full scene holds 285 bands from 380–2500 nm at 60 m: enough to estimate leaf water, pigments, soil minerals and surface water quality. The gold outline on the globe is the scene footprint.`),
           h('div', { class: 'row' },
             g.data ? h('a', { class: 'btn ghost', href: g.data, target: '_blank', rel: 'noopener' }, 'Reflectance data (.nc) ↗') : null,
             h('a', { class: 'btn ghost', href: `https://search.earthdata.nasa.gov/search/granules?p=${g.concept}&q=${encodeURIComponent(g.title)}`, target: '_blank', rel: 'noopener' }, 'Earthdata Search ↗')),
@@ -690,42 +773,48 @@ function emitSection(lat, lon, tok) {
 }
 
 // Methane plumes in view
-const plumeLayer = L.layerGroup();
-let plumeTimer = null;
+let plumeMarkers = [], plumeTimer = null, plumesOn = false;
 async function loadPlumes() {
-  if (!map.hasLayer(plumeLayer)) return;
-  const b = map.getBounds(), w = Math.max(-180, b.getWest()), e = Math.min(180, b.getEast()), s = Math.max(-90, b.getSouth()), n = Math.min(90, b.getNorth());
-  const d = await getJSON(`${CMR}?short_name=EMITL2BCH4PLM&bounding_box=${w},${s},${e},${n}&sort_key%5B%5D=-start_date&page_size=300`);
-  plumeLayer.clearLayers();
+  if (!plumesOn) return;
+  const b = map.getBounds(), w = Math.max(-180, b.getWest()), e = Math.min(180, b.getEast()), so = Math.max(-90, b.getSouth()), n = Math.min(90, b.getNorth());
+  const d = await getJSON(`${CMR}?short_name=EMITL2BCH4PLM&bounding_box=${w},${so},${e},${n}&sort_key%5B%5D=-start_date&page_size=300`);
+  plumeMarkers.forEach(m => m.remove()); plumeMarkers = [];
+  if (!plumesOn) return;
   for (const g of d.feed.entry.map(granule)) {
     if (!g.poly?.length) continue;
     const c = g.poly.reduce((a, p) => [a[0] + p[0] / g.poly.length, a[1] + p[1] / g.poly.length], [0, 0]);
-    const m = L.marker(c, { icon: L.divIcon({ className: '', html: '<div class="plume-ic"></div>', iconSize: [0, 0] }), title: 'EMIT methane plume' });
-    m.bindPopup(() => h('div', {}, h('strong', {}, 'EMIT methane plume'), h('br'), new Date(g.t).toLocaleString(),
+    const pop = new maplibregl.Popup({ offset: 10, className: 'plume-pop' }).setDOMContent(h('div', {}, h('strong', {}, 'EMIT methane plume'), h('br'), new Date(g.t).toLocaleString(),
       g.browse ? h('img', { src: g.browse, alt: 'Methane plume enhancement preview' }) : null,
-      h('div', { style: 'margin-top:6px;color:#8fa5a2' }, 'Methane concentration enhancement detected from orbit. Sources include landfills, oil & gas, agriculture and wetlands.')));
-    plumeLayer.addLayer(m);
+      h('div', { style: 'margin-top:6px;color:#8fa5a2' }, 'Methane enhancement detected from orbit. Sources include landfills, oil & gas, agriculture and wetlands.')));
+    const el = h('div', { class: 'plume-ic', title: 'EMIT methane plume' });
+    el.addEventListener('click', ev => ev.stopPropagation());
+    plumeMarkers.push(new maplibregl.Marker({ element: el }).setLngLat([c[1], c[0]]).setPopup(pop).addTo(map));
   }
 }
-$('lyMethane').addEventListener('change', e => { if (e.target.checked) { plumeLayer.addTo(map); loadPlumes().catch(() => {}); } else map.removeLayer(plumeLayer); });
+$('lyMethane').addEventListener('change', e => { plumesOn = e.target.checked; if (plumesOn) loadPlumes().catch(() => {}); else { plumeMarkers.forEach(m => m.remove()); plumeMarkers = []; } });
 map.on('moveend', () => { clearTimeout(plumeTimer); plumeTimer = setTimeout(() => loadPlumes().catch(() => {}), 600); });
 
-// ---------------- player: playlists, live streams, soundscape tour ----------------
+// ---------------- player: around-the-pin tour, playlists, live streams ----------------
 const audio = $('audio'), pbtn = $('pbtn'), pnext = $('pnext'), canvas = $('spec'), g2 = canvas.getContext('2d');
-let actx, analyser, gain, hls = null, clipEnd = null, raf = 0;
+let actx, analyser, agc, vol, hls = null, clipEnd = null, raf = 0, level = 0;
 let playlist = [], pi = -1, pmode = 'idle', ptok = 0, advancing = false;
 function ensureAudio() {
   if (actx) { actx.resume(); return; }
   actx = new (window.AudioContext || window.webkitAudioContext)();
-  const src = actx.createMediaElementSource(audio);
+  const s = actx.createMediaElementSource(audio);
+  // Many field recordings are very quiet. An automatic gain stage levels them, a limiter catches peaks.
   analyser = actx.createAnalyser(); analyser.fftSize = 4096; analyser.smoothingTimeConstant = 0.2; analyser.minDecibels = -100; analyser.maxDecibels = -25;
-  gain = actx.createGain(); gain.gain.value = +$('vol').value;
-  src.connect(analyser); analyser.connect(gain); gain.connect(actx.destination);
+  agc = actx.createGain(); agc.gain.value = 4;
+  const lim = actx.createDynamicsCompressor(); lim.threshold.value = -4; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.1;
+  vol = actx.createGain(); vol.gain.value = +$('vol').value;
+  s.connect(analyser); s.connect(agc); agc.connect(lim); lim.connect(vol); vol.connect(actx.destination);
   actx.resume();
   drawTicks();
 }
 function stopHls() { if (hls) { hls.destroy(); hls = null; } }
 function setNow(title, sub) { $('ptitle').textContent = title; $('psub').textContent = sub; }
+// One place decides the play/pause look: a class on the player swaps the icons in CSS.
+function setIcon(on) { $('player').classList.toggle('playing', on); pbtn.setAttribute('aria-label', on ? 'Pause' : 'Play'); pbtn.setAttribute('aria-pressed', on); }
 function setBusy(on) { $('player').classList.toggle('busy', on); if (on) setIcon(true); else if (audio.paused && !advancing) setIcon(false); }
 
 async function startClip(d) {
@@ -733,7 +822,8 @@ async function startClip(d) {
   clipEnd = d.sc.endTime != null ? d.sc.endTime + 1.5 : null;
   const pos = playlist.length > 1 ? ` · ${pi + 1} of ${playlist.length}` : '';
   setNow(d.title, d.sub + pos); setBusy(true);
-  if (d.lat != null) selectAt(d.lat, d.lon);
+  selectAt(d.lat, d.lon);
+  level = 0; agc.gain.setValueAtTime(20, actx.currentTime);
   audio.src = d.sc.url;
   audio.addEventListener('loadedmetadata', () => { audio.currentTime = Math.max(0, (d.sc.startTime || 0) - 0.75); }, { once: true });
   try { await audio.play(); }
@@ -748,28 +838,29 @@ async function playIndex(i) {
     if (tok !== ptok) return;
     if (d) { pi = i; await startClip(d); return; }
   }
-  setBusy(false); pi = playlist.length; pnext.disabled = true;
-  setNow(pmode === 'tour' ? 'Tour finished' : 'End of clips', 'Press play for a soundscape tour of the sites in view');
+  setBusy(false); pi = playlist.length; pnext.disabled = true; selectAt(null);
+  setNow(pmode === 'tour' ? 'Tour finished' : 'End of clips', pin ? 'Press play to hear around the pin again' : 'Drop a pin on the globe, then press play');
   pmode = 'idle';
 }
-function setPlaylist(items, mode, start = 0) {
-  playlist = items; pmode = mode; pi = -1;
-  ensureAudio();
-  playIndex(start);
-}
+function setPlaylist(items, mode, start = 0) { playlist = items; pmode = mode; pi = -1; ensureAudio(); playIndex(start); }
 function advance() { if (advancing || pmode === 'live' || pmode === 'idle') return; advancing = true; const tok = ptok; setTimeout(() => { advancing = false; if (tok === ptok) playIndex(pi + 1); }, 500); }
 
-// Tour: the stations in view, from richest to thinnest balance, one recent clip each.
+const RECENT = `query($id:ID!){ station(id:$id){ detections(first:4, validSoundscape:true){ nodes{ timestamp confidence species{ commonName } soundscape{ url startTime endTime } } } } }`;
+// Tour: the mics around the pin, nearest first; without a pin, the stations in view by balance.
 function startTour() {
-  const b = map.getBounds();
-  let list = [...stations.values()].filter(s => s.bal && b.contains([s.lat, s.lon])).sort((x, y) => y.bal.sbi - x.bal.sbi);
-  if (!list.length) list = [...stations.values()].filter(s => s.bal).sort((x, y) => y.bal.sbi - x.bal.sbi);
-  if (list.length > 30) { const step = list.length / 30; list = Array.from({ length: 30 }, (_, i) => list[Math.floor(i * step)]); }
+  let list, around = !!pin;
+  if (around) list = pin.near.map(o => ({ st: o.st, note: kmTxt(o.km) }));
+  else {
+    const b = map.getBounds();
+    let all = [...stations.values()].filter(s => s.bal && inB(b, s.lat, s.lon)).sort((x, y) => y.bal.sbi - x.bal.sbi);
+    if (all.length > 30) { const step = all.length / 30; all = Array.from({ length: 30 }, (_, i) => all[Math.floor(i * step)]); }
+    list = all.map(st => ({ st, note: `balance ${st.bal.sbi}` }));
+  }
   if (!list.length) { setNow('Soundscape tour', 'Still gathering station data, try again in a moment'); return; }
-  setPlaylist(list.map(st => async () => {
-    const d = (await gql(`query($id:ID!){ station(id:$id){ detections(first:3, validSoundscape:true){ nodes{ timestamp confidence species{ commonName } soundscape{ url startTime endTime } } } } }`, { id: st.id })).station;
+  setPlaylist(list.map(({ st, note }) => async () => {
+    const d = (await gql(RECENT, { id: st.id })).station;
     const n = d?.detections?.nodes?.find(x => x.soundscape?.url);
-    return n ? { sc: n.soundscape, lat: st.lat, lon: st.lon, title: `${st.name} · balance ${st.bal.sbi}`, sub: `${n.species.commonName}, ${ago(n.timestamp)}` } : null;
+    return n ? { sc: n.soundscape, lat: st.lat, lon: st.lon, title: `${st.name} · ${note}`, sub: `${n.species.commonName}, ${ago(n.timestamp)}` } : null;
   }), 'tour');
 }
 
@@ -777,7 +868,7 @@ async function playHydro(fid) {
   const hy = hydros.get(fid); if (!hy) return;
   const tok = ++ptok;
   ensureAudio(); stopHls(); audio.pause(); clipEnd = null; pmode = 'live'; pnext.disabled = true;
-  setNow(`${hy.a.name} · live hydrophone`, 'Connecting to the stream…'); setBusy(true);
+  setNow(`${hy.a.name} · live hydrophone`, 'Connecting to the stream…'); setBusy(true); selectAt(hy.lat, hy.lon);
   try {
     const live = await hydroStatus(hy);
     if (tok !== ptok) return;
@@ -787,6 +878,7 @@ async function playHydro(fid) {
       setNow(`${hy.a.name} · offline`, hy.last ? `No audio since ${ago(hy.last)}${alt ? `. Try ${alt.a.name}, it's live.` : '.'}` : `Stream unavailable${alt ? `. Try ${alt.a.name}, it's live.` : '.'}`);
       return;
     }
+    level = 0; agc.gain.setValueAtTime(2, actx.currentTime);
     if (window.Hls?.isSupported()) { hls = new Hls({ liveSyncDuration: 20 }); hls.loadSource(hy.url); hls.attachMedia(audio); }
     else if (audio.canPlayType('application/vnd.apple.mpegurl')) audio.src = hy.url;
     else throw new Error('HLS unsupported');
@@ -794,23 +886,23 @@ async function playHydro(fid) {
     $('psub').textContent = 'Live from the Salish Sea · whales, vessels, seals, snapping shrimp';
   } catch (e) { if (tok === ptok) { setBusy(false); pmode = 'idle'; $('psub').textContent = 'Stream unavailable right now.'; } }
 }
+function pauseMain() { ++ptok; advancing = false; stopHls(); audio.pause(); setBusy(false); setIcon(false); if (pmode === 'live') pmode = 'idle'; }
 audio.addEventListener('timeupdate', () => { if (clipEnd && audio.currentTime > clipEnd && !audio.paused) { audio.pause(); advance(); } });
 audio.addEventListener('ended', () => advance());
 audio.addEventListener('playing', () => setBusy(false));
 audio.addEventListener('waiting', () => setBusy(true));
-// SVG elements ignore the .hidden property, so toggle the attribute.
-function setIcon(on) { $('icPlay').toggleAttribute('hidden', on); $('icStop').toggleAttribute('hidden', !on); pbtn.setAttribute('aria-label', on ? 'Pause' : 'Play'); }
-audio.addEventListener('play', () => { setIcon(true); loop(); });
-audio.addEventListener('pause', () => { if (!advancing) setIcon(false); setBusy(false); });
+audio.addEventListener('play', () => { setIcon(true); loop(); window.dispatchEvent(new Event('biophony:mainplay')); });
+audio.addEventListener('pause', () => { if (!advancing) setIcon(false); $('player').classList.remove('busy'); });
 pbtn.addEventListener('click', () => {
-  if (!audio.paused || $('player').classList.contains('busy')) { ++ptok; advancing = false; audio.pause(); setBusy(false); setIcon(false); return; }
+  if (!audio.paused || $('player').classList.contains('busy')) { pauseMain(); return; }
   if (pmode === 'idle' || (!audio.src && !hls)) { startTour(); return; }
   ensureAudio();
   if (clipEnd && audio.currentTime > clipEnd - 0.1) { playIndex(pi + 1); return; }
   audio.play().catch(() => {});
 });
 pnext.addEventListener('click', () => { if (pmode !== 'live') playIndex(pi + 1); });
-$('vol').addEventListener('input', e => { if (gain) gain.gain.value = +e.target.value; });
+$('vol').addEventListener('input', e => { if (vol) vol.gain.value = +e.target.value; });
+
 // colour map: night -> teal -> gold -> white
 const LUT = (() => {
   const stops = [[0, [7, 16, 17]], [0.35, [20, 70, 80]], [0.6, [60, 170, 150]], [0.82, [227, 183, 101]], [1, [255, 248, 230]]];
@@ -826,26 +918,30 @@ const FMIN = 60;
 function sizeCanvas() { const r = canvas.getBoundingClientRect(), dpr = Math.min(2, devicePixelRatio || 1); canvas.width = Math.max(1, r.width * dpr | 0); canvas.height = Math.max(1, r.height * dpr | 0); g2.fillStyle = '#071011'; g2.fillRect(0, 0, canvas.width, canvas.height); drawTicks(); }
 function drawTicks() {
   const el = $('ticks'), ny = actx ? actx.sampleRate / 2 : 24000, H = canvas.getBoundingClientRect().height;
-  el.replaceChildren(...[100, 1000, 10000].filter(f => f < ny).map(f => {
-    const y = H - (Math.log(f / FMIN) / Math.log(ny / FMIN)) * H;
-    return h('span', { style: `top:${y}px` }, f >= 1000 ? f / 1000 + 'k' : f);
-  }));
+  el.replaceChildren(...[100, 1000, 10000].filter(f => f < ny).map(f => h('span', { style: `top:${H - (Math.log(f / FMIN) / Math.log(ny / FMIN)) * H}px` }, f >= 1000 ? f / 1000 + 'k' : f)));
 }
 new ResizeObserver(sizeCanvas).observe(canvas);
-let bins;
+let bins, td;
 function loop() {
   cancelAnimationFrame(raf);
   const step = () => {
     if (audio.paused || !analyser) return;
+    // automatic gain: follow the loud parts of the raw signal and aim them at about -16 dBFS
+    if (!td) td = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(td);
+    let s = 0; for (let i = 0; i < td.length; i++) s += td[i] * td[i];
+    const r = Math.sqrt(s / td.length);
+    level = r > level ? level + (r - level) * 0.3 : level * 0.997;
+    if (level > 1e-7) agc.gain.setTargetAtTime(Math.max(0.5, Math.min(600, 0.16 / level)), actx.currentTime, 0.25);
     const W = canvas.width, H = canvas.height, ny = actx.sampleRate / 2, N = analyser.frequencyBinCount;
     if (!bins || bins.length !== N) bins = new Uint8Array(N);
     analyser.getByteFrequencyData(bins);
     const dx = 2;
     g2.drawImage(canvas, dx, 0, W - dx, H, 0, 0, W - dx, H);
-    const col = g2.createImageData(dx, H);
+    const col = g2.createImageData(dx, H), boost = Math.min(50, 20 * Math.log10(Math.max(1, agc.gain.value)));
     for (let y = 0; y < H; y++) {
       const f = FMIN * Math.pow(ny / FMIN, (H - 1 - y) / (H - 1));
-      const v = bins[Math.min(N - 1, Math.round((f / ny) * N))];
+      const v = Math.min(255, bins[Math.min(N - 1, Math.round((f / ny) * N))] + boost * 3) | 0;
       for (let x = 0; x < dx; x++) { const o = (y * dx + x) * 4; col.data[o] = LUT[v * 3]; col.data[o + 1] = LUT[v * 3 + 1]; col.data[o + 2] = LUT[v * 3 + 2]; col.data[o + 3] = 255; }
     }
     g2.putImageData(col, W - dx, 0);
@@ -855,8 +951,8 @@ function loop() {
 }
 
 // ---------------- shared with the studio ----------------
-window.biophony = { map, stations, hydros, gql, h, fft, ago, fmt, normCls, CLS, COLORS, sbiColor, hydroStatus,
-  pauseMain: () => { ++ptok; stopHls(); audio.pause(); setBusy(false); setIcon(false); pmode = pmode === 'live' ? 'idle' : pmode; } };
+window.biophony = { map, stations, hydros, gql, h, fft, ago, fmt, km, kmTxt, normCls, CLS, COLORS, sbiColor, hydroStatus, pauseMain, dropPin, repin, openStation, openInfo, median,
+  get pin() { return pin; }, get analysing() { return analysing; } };
 
 // ---------------- polling + visibility ----------------
 const timers = [];
@@ -875,7 +971,6 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---------------- boot ----------------
-if (innerWidth < 640) document.querySelector('.layers').open = false;
 (async () => {
   loadCounts().then(scheduleRefresh).catch(() => {});
   loadHydros().catch(() => {});

@@ -1,18 +1,15 @@
 # Biophony
 
-A live map of the planet's sound. Free, always-on acoustic monitors stream what they recognise (birds, bats, insects, frogs, mammals, whales), and NASA satellite layers add the view from orbit.
+A sound discovery globe for ecologists and sound designers. Drop a pin anywhere and Biophony gathers the nearest always-on acoustic monitors (birds, bats, insects, frogs, mammals, whales), checks every recording for noise and silence, and turns the clean ones into a **Field Studio**:
 
-Instead of listing every recognition, Biophony scores each station with a **Soundscape Balance Index** (0–100) built from peer-reviewed diversity metrics: Hill-number diversity scored against stations at similar latitude, Pielou evenness, and taxonomic breadth. It maps the scores as a regional grid with a distribution and region breakdown for whatever is in view. Opening a station adds a site health score that combines the balance index with soundscape indices computed in the browser from the station's audio (NDSI, ADI, acoustic entropy) and the MODIS Vegetation Condition Index. Methods and references are in the About tab.
+- **Kit**: 8 pads and a 16-step sequencer. Each sound is measured for tonality (how far its strongest spectral peak rises above the rest, its frequency, and how much it wanders) and for transients (spectral-flux onsets, flatness, centroid, attack). Steady calls become a low voice, a lead and a call, retuned into one key chosen to need the least correction, and play generated melodies. Broadband fast-attack sounds become kick, snare, hats and perc; the kick gets an optional tuned sine body. Exports: a ZIP of 24-bit WAVs named by note, with MIDI (drums on ch 10, tuned pads on ch 1–3), settings and credits; a seamless 4-bar loop; the pattern as MIDI. Bat recordings are slowed ×10.
+- **Library**: audition and download the recordings from the pin's mics. Each shows an SNR estimate (call band, loud frames inside the detection window against quiet frames outside); near-silent and noisy clips are hidden by default, and everything plays levelled to the same loudness, since many field recorders peak near −50 dBFS.
+- **Field recorder**: the mics near the pin, sorted by balance or distance, each with a preview. Pick up to 4 (or a live hydrophone) and render a level-matched, crossfaded ambience bed (15 s–5 min, mono or stereo, 48 kHz 24/16-bit) with a cue sheet.
 
-**Field Studio** (experiment) turns the region in view into a sound toolkit:
+The globe shows each station's **Soundscape Balance Index** (Hill-number diversity scored against stations at similar latitude, Pielou evenness, taxonomic breadth), as dots or a regional grid. Underlays, dimmed beneath the dots: MODIS land cover (ecosystem type), Anthromes, MODIS NDVI, GEDI canopy height, Black Marble night lights, Human Footprint, VIIRS true colour. Overlays: WDPA protected areas, terrain shading, hydrophones, EMIT methane plumes. The Balance & info drawer holds the balance breakdown, per-site health (balance + NDSI/ADI/entropy from the station's audio + MODIS Vegetation Condition Index + EMIT scenes) and methods with references.
 
-- **Kit**: picks 8 species' recordings, finds transients by spectral-flux onset detection, slices one-shots, assigns drum roles by spectral centroid and flatness, and applies per-pad ADSR, pitch and filters. A 16-step sequencer has generated patterns (house, boom bap, breakbeat, techno, dembow, a Euclidean "dawn chorus"). It exports the kit as a ZIP of 24-bit WAVs with MIDI, settings and credits, a seamless 4-bar loop, or the pattern as MIDI. Bat recordings are slowed ×10 (time expansion).
-- **Library**: search, filter, audition and download every recognised recording in the region, singly or as a ZIP with credits.
-- **Field recorder**: choose up to 4 station mics (or a live hydrophone) and a length from 15 s to 5 min, and render a crossfaded mono or stereo ambience bed (48 kHz, 24/16-bit, rumble cut, fades, seamless loop) with a cue sheet.
-
-- **Listening:** [BirdWeather](https://www.birdweather.com) public GraphQL API (BirdNET recognitions from 10k+ stations, with audio clips) and [Orcasound](https://www.orcasound.net) live hydrophone streams and detections.
-- **From orbit:** NASA EMIT scenes and methane plumes via the CMR search API, plus MODIS NDVI, PACE OCI chlorophyll and VIIRS true colour from NASA GIBS.
-- **Readout per site:** species richness, Shannon diversity and evenness over 24 h, plus share of detections by animal group.
+- **Listening:** [BirdWeather](https://www.birdweather.com) public GraphQL API and [Orcasound](https://www.orcasound.net) live hydrophones.
+- **Layers:** NASA GIBS, NASA CMR (EMIT), ORNL DAAC (MODIS), UNEP-WCMC (WDPA), Esri basemaps. Globe by MapLibre GL.
 - Static site, no build step and no API keys. Run `python3 -m http.server` and open it.
 
 Made by [Anish Ghosh](https://anishohmyghosh.github.io/website/).

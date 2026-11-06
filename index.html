@@ -4,80 +4,215 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Biophony</title>
-<meta name="description" content="A live map of the planet's sound. Free acoustic monitors around the world stream species recognitions; NASA EMIT, MODIS and PACE add the view from orbit.">
+<meta name="description" content="A sound discovery globe for ecologists and sound designers. Drop a pin, hear the nearest acoustic monitors, build kits, sound packs and ambience beds from what they recorded.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,400&family=Manrope:wght@400;500;700&display=swap">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css">
+<link rel="stylesheet" href="styles.css?v=5">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%230f1d1f'/%3E%3Cpath d='M6 16h3l2-6 3 12 3-9 2 5 2-2h5' stroke='%2378d6c0' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
 <body>
 <header class="top">
   <div class="brand">
     <h1>Biophony</h1>
-    <p class="sub">How balanced the planet sounds, live. <span class="dot" id="liveDot"></span><span id="liveText">connecting…</span></p>
+    <p class="sub">Drop a pin, hear the planet, make something from it. <span class="dot" id="liveDot"></span><span id="liveText">connecting…</span></p>
   </div>
-  <button class="btn studio-btn" id="openStudio" title="Build drum kits, sound packs and ambience beds from the region in view">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
-    Field Studio
+  <button class="btn ghost" id="openInfo" aria-controls="info">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+    Balance &amp; info
   </button>
-  <dl class="stats" aria-label="Last 24 hours across the network">
-    <div><dt>Recognitions, 24 h</dt><dd id="stDet">–</dd></div>
-    <div><dt>Species</dt><dd id="stSpe">–</dd></div>
-    <div><dt>Listening stations</dt><dd id="stSta">–</dd></div>
-    <div><dt>Hydrophones</dt><dd id="stHyd">–</dd></div>
-  </dl>
 </header>
 
 <main class="layout">
-  <section class="map-wrap" aria-label="World map of acoustic monitors">
+  <section class="globe" aria-label="Globe of acoustic monitors">
     <div id="map"></div>
-    <details class="layers" open>
+    <details class="layers">
       <summary>Layers</summary>
-      <p class="lh">Ecological balance</p>
-      <label><input type="radio" name="view" value="grid" checked> Regional grid <small>median balance of the stations in each cell</small></label>
-      <label><input type="radio" name="view" value="sites"> Individual stations</label>
-      <div class="legend"><div class="bar sbi-grad"></div><div class="ends"><span>0 low</span><span>50</span><span>100 rich</span></div></div>
-      <label><input type="checkbox" id="lyHydro" checked> Orcasound hydrophones</label>
-      <p class="lh">From orbit · NASA</p>
-      <label><input type="radio" name="sat" value="none" checked> None</label>
-      <label><input type="radio" name="sat" value="ndvi"> Vegetation greenness <small>MODIS NDVI, 8-day</small></label>
-      <label><input type="radio" name="sat" value="chl"> Ocean chlorophyll <small>PACE OCI, daily</small></label>
-      <label><input type="radio" name="sat" value="true"> True colour <small>VIIRS, daily</small></label>
-      <label><input type="checkbox" id="lyMethane"> EMIT methane plumes in view</label>
-      <div class="legend" id="legend" hidden></div>
+      <div class="ly-body">
+        <p class="lh">Stations</p>
+        <label><input type="radio" name="view" value="sites" checked> Individual stations</label>
+        <label><input type="radio" name="view" value="grid"> Regional grid <small>median balance per cell</small></label>
+        <div class="legend"><div class="bar sbi-grad"></div><div class="ends"><span>0 low</span><span>50</span><span>100 rich</span></div></div>
+        <label><input type="checkbox" id="lyHydro" checked> Hydrophones <small>Orcasound, live</small></label>
+        <p class="lh">Underlay · one at a time, dimmed</p>
+        <label><input type="radio" name="sat" value="none" checked> None</label>
+        <label><input type="radio" name="sat" value="eco"> Ecosystem type <small>MODIS land cover, 500 m</small></label>
+        <label><input type="radio" name="sat" value="anthro"> Human-shaped biomes <small>Anthromes</small></label>
+        <label><input type="radio" name="sat" value="ndvi"> Vegetation greenness <small>MODIS NDVI, 8-day</small></label>
+        <label><input type="radio" name="sat" value="canopy"> Canopy height <small>GEDI lidar · tall canopy, more reverb</small></label>
+        <label><input type="radio" name="sat" value="night"> Night lights <small>proxy for traffic and machine noise</small></label>
+        <label><input type="radio" name="sat" value="foot"> Human footprint <small>roads, land use, population</small></label>
+        <label><input type="radio" name="sat" value="true"> True colour <small>VIIRS, yesterday</small></label>
+        <div class="legend" id="legend" hidden></div>
+        <p class="lh">Overlays</p>
+        <label><input type="checkbox" id="lyWdpa"> Protected areas <small>WDPA</small></label>
+        <label><input type="checkbox" id="lyShade"> Terrain shading</label>
+        <label><input type="checkbox" id="lyMethane"> EMIT methane plumes</label>
+      </div>
     </details>
+    <p class="pin-hint" id="pinHint">Click anywhere on the globe to drop a pin</p>
+
+    <footer class="player" id="player">
+      <button class="pbtn" id="pbtn" aria-label="Play" aria-pressed="false">
+        <svg class="ic-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>
+        <svg class="ic-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>
+      </button>
+      <button class="pnext" id="pnext" aria-label="Next clip" title="Next" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l8.5 6L6 18zM16 6h2.2v12H16z" fill="currentColor"/></svg></button>
+      <div class="pinfo">
+        <p class="ptitle" id="ptitle">Listen</p>
+        <p class="psub" id="psub">Press play for a tour of the sites in view, or drop a pin</p>
+      </div>
+      <div class="spec"><canvas id="spec"></canvas><div class="ticks" id="ticks"></div></div>
+      <label class="pvol"><span class="sr">Volume</span><input type="range" id="vol" min="0" max="1" step="0.01" value="0.8"></label>
+      <audio id="audio" crossorigin="anonymous" preload="none"></audio>
+    </footer>
   </section>
 
+  <section class="studio" id="studio" aria-labelledby="stTitle">
+    <div class="st-top">
+      <div class="st-brand">
+        <p class="kicker" id="stTitle">Field Studio</p>
+        <h2 id="stRegion">Drop a pin</h2>
+        <p class="st-region"><span id="stRegionSub">Kits, sounds and ambience from the mics nearest your pin</span> <button class="linkish" id="stSite" hidden>site health</button></p>
+      </div>
+      <div class="st-right">
+        <div class="seg sm" id="pinN" role="group" aria-label="How many mics"><span>Mics</span><button data-n="6" aria-pressed="false">6</button><button data-n="12" class="on" aria-pressed="true">12</button><button data-n="24" aria-pressed="false">24</button></div>
+        <div class="st-tabs" role="tablist">
+          <button role="tab" class="st-tab on" data-t="kit" aria-selected="true">Kit</button>
+          <button role="tab" class="st-tab" data-t="lib" aria-selected="false">Library</button>
+          <button role="tab" class="st-tab" data-t="rec" aria-selected="false">Field recorder</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="st-empty" id="stEmpty">
+      <p>Click anywhere on the globe. Biophony gathers the nearest listening stations, checks every recording for noise and silence, and turns what's left into:</p>
+      <ul class="st-what">
+        <li><b>Kit</b> 8 pads with a sequencer. Steady calls become tuned voices in one key, noisy hits become drums.</li>
+        <li><b>Library</b> clean recordings to audition and download, levelled to the same loudness.</li>
+        <li><b>Field recorder</b> pick mics nearby and stitch an ambience bed for film, or record a hydrophone live.</li>
+      </ul>
+      <p class="lh">Rich right now</p>
+      <div class="st-suggest" id="stSuggest"></div>
+    </div>
+
+    <div id="stBody" hidden>
+    <section class="st-pane" id="st-kit">
+      <p class="st-status" id="kitStatus" role="status"></p>
+      <div class="kit-top">
+        <div class="pads" id="pads"></div>
+        <div class="editor" id="editor"></div>
+      </div>
+      <div class="transport">
+        <button class="btn" id="kPlay" data-label="Play" aria-pressed="false">▶ Play</button>
+        <label class="tctl">Style
+          <select id="kStyle"><option>House</option><option>Boom bap</option><option>Breakbeat</option><option>Techno</option><option>Dembow</option><option>Dawn chorus</option></select></label>
+        <button class="btn ghost sm" id="kGen" title="Write a new pattern and melody in this style">✦ Generate</button>
+        <button class="btn ghost sm" id="kMut" title="Change a few steps">Mutate</button>
+        <button class="btn ghost sm" id="kClear">Clear</button>
+        <label class="tctl">Key <select id="kRoot" aria-label="Key root"></select><b id="kKeyNow"></b> <select id="kScale" aria-label="Scale"></select></label>
+        <label class="tctl">Tempo <input type="range" id="kBpm" min="60" max="180" value="96"><output id="kBpmV">96</output></label>
+        <label class="tctl">Swing <input type="range" id="kSwing" min="0" max="45" value="12"><output id="kSwingV">12%</output></label>
+        <span class="grow"></span>
+        <button class="btn ghost sm" id="kNew" title="Pick 8 new sounds from around the pin">↻ New kit</button>
+      </div>
+      <div class="seq" id="seq"></div>
+      <div class="exports">
+        <span class="lh">Export</span>
+        <button class="btn sm" id="kKit">⤓ Kit (.zip)</button>
+        <button class="btn ghost sm" id="kLoop">⤓ 4-bar loop (.wav)</button>
+        <button class="btn ghost sm" id="kMidi">⤓ Pattern (.mid)</button>
+        <span class="hint">Keys 1–8 play pads · space starts and stops · shift-click a step for an accent · scroll on a melody step to change its note</span>
+      </div>
+    </section>
+
+    <section class="st-pane" id="st-lib" hidden>
+      <div class="lib-bar">
+        <input type="search" id="libSearch" placeholder="Search species or station" aria-label="Search sounds">
+        <label class="tctl">Quality <select id="libQ"><option value="16">Clean only (16 dB+)</option><option value="10" selected>Usable (10 dB+)</option><option value="-1">Everything</option></select></label>
+        <label class="tctl">Sort <select id="libSort"><option value="snr">Cleanest</option><option value="new">Newest</option><option value="conf">Confidence</option><option value="species">Species A–Z</option></select></label>
+      </div>
+      <div class="lib-bar">
+        <div class="fchips" id="libChips"></div>
+        <span class="grow"></span>
+        <label class="tctl">Cut <select id="libCut"><option value="call">Call only (±0.5 s)</option><option value="full">Full clip</option></select></label>
+        <label class="tctl"><input type="checkbox" id="libNorm" checked> Normalise</label>
+        <button class="btn sm" id="libZip" disabled>Select sounds to pack</button>
+      </div>
+      <p class="hint" id="libMsg"></p>
+      <ul class="lib" id="libList"></ul>
+      <button class="btn ghost" id="libMore" hidden>Load more</button>
+    </section>
+
+    <section class="st-pane" id="st-rec" hidden>
+      <div class="rec">
+        <div class="rec-mics">
+          <div class="rec-head"><h3>Mics near the pin</h3><label class="tctl">Sort <select id="recSort"><option value="bal">Balance</option><option value="near">Nearest</option></select></label></div>
+          <p class="hint" id="recSel">Choose up to 4 mics. ▶ previews one.</p>
+          <div id="recMics"></div>
+        </div>
+        <div class="rec-opts">
+          <h3>Ambience bed</h3>
+          <p class="hint">Stitches each mic's recent recordings into one continuous bed, level-matched with crossfades, skipping silent and very noisy clips. For film, games, installations or study. Picking a hydrophone records its live stream in real time.</p>
+          <p class="lh">Length</p>
+          <div class="seg" id="recLens"><button data-s="15" aria-pressed="false">15 s</button><button data-s="30" class="on" aria-pressed="true">30 s</button><button data-s="60" aria-pressed="false">1 min</button><button data-s="120" aria-pressed="false">2 min</button><button data-s="300" aria-pressed="false">5 min</button></div>
+          <div class="opt-grid">
+            <label>Channels <select id="recCh"><option value="2">Stereo (mics spread L–R)</option><option value="1">Mono</option></select></label>
+            <label>Bit depth <select id="recBits"><option value="24">48 kHz / 24-bit</option><option value="16">48 kHz / 16-bit</option></select></label>
+            <label>Crossfade <select id="recXf"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></label>
+            <label>Fade in/out <select id="recFade"><option value="0">None</option><option value="1" selected>1 s</option><option value="3">3 s</option></select></label>
+            <label>Peak level <select id="recPeak"><option value="-1">−1 dBFS</option><option value="-3" selected>−3 dBFS</option><option value="-6">−6 dBFS</option></select></label>
+            <label class="chk"><input type="checkbox" id="recHp" checked> Rumble cut (80 Hz high-pass)</label>
+            <label class="chk"><input type="checkbox" id="recLoop"> Seamless loop</label>
+          </div>
+          <button class="btn" id="recGo" disabled>● Build recording</button>
+          <p class="st-status" id="recMsg" role="status"></p>
+          <div id="recOut"></div>
+        </div>
+      </div>
+    </section>
+    </div>
+  </section>
+</main>
+
+<div class="info" id="info" hidden role="dialog" aria-modal="true" aria-label="Balance and info">
   <aside class="panel">
     <div class="tabs" role="tablist">
       <button role="tab" class="tab on" data-t="balance" aria-selected="true">Balance</button>
       <button role="tab" class="tab" data-t="site" aria-selected="false">Site</button>
       <button role="tab" class="tab" data-t="about" aria-selected="false">About</button>
+      <button class="tab-x" id="infoClose" aria-label="Close">✕</button>
     </div>
-
-    <div class="pane" id="pane-balance">
-      <div id="bal"><p class="empty">Gathering 24 hours of recognitions from every station…</p></div>
-    </div>
-
-    <div class="pane" id="pane-site" hidden>
-      <div id="site"><p class="empty">Pick a station or hydrophone on the map to see what it's hearing, its acoustic biodiversity, and what NASA's EMIT has seen there.</p></div>
-    </div>
-
+    <div class="pane" id="pane-balance"><div id="bal"><p class="empty">Gathering 24 hours of recognitions from every station…</p></div></div>
+    <div class="pane" id="pane-site" hidden><div id="site"><p class="empty">Drop a pin, then open "site health" in the Field Studio for the nearest station's biodiversity, soundscape, vegetation and EMIT scenes.</p></div></div>
     <div class="pane prose" id="pane-about" hidden>
+      <dl class="stats" aria-label="Last 24 hours across the network">
+        <div><dt>Recognitions, 24 h</dt><dd id="stDet">–</dd></div>
+        <div><dt>Species</dt><dd id="stSpe">–</dd></div>
+        <div><dt>Listening stations</dt><dd id="stSta">–</dd></div>
+        <div><dt>Hydrophones live</dt><dd id="stHyd">–</dd></div>
+      </dl>
       <h2>What this is</h2>
-      <p>A live view of the planet's <em>biophony</em>: the combined sound of living things (Pijanowski et al. 2011). Thousands of free, always-on acoustic monitors report what they recognise. Rather than list every bird, Biophony turns those recognitions into a balance index for each place and adds satellite measurements, so you can see where the soundscape is rich and where it is thin.</p>
+      <p>A live view of the planet's <em>biophony</em>: the combined sound of living things (Pijanowski et al. 2011). Thousands of free, always-on acoustic monitors report what they recognise. Drop a pin anywhere and Biophony gathers the nearest microphones: build a drum kit from what they heard, browse and download the recordings, or stitch an ambience bed for film. Behind it, each station gets a balance index and satellite context, so you can see where the soundscape is rich and where it is thin.</p>
       <h3>Listening</h3>
       <ul>
         <li><strong>BirdWeather</strong>: over 10,000 stations (BirdWeather PUCs and BirdNET-Pi) running the BirdNET model. Birds, plus bats, insects, frogs and some mammals. Each recognition comes with the original audio clip.</li>
         <li><strong>Orcasound</strong>: live hydrophones in the Salish Sea. Whale calls, vessels and other sounds are flagged by listeners and by the OrcaHello model, and you can listen to the live stream.</li>
       </ul>
-      <h3>From orbit</h3>
+      <h3>Map layers</h3>
       <ul>
-        <li><strong>EMIT</strong> (imaging spectrometer on the ISS, 285 bands, 60 m): for each site, the most recent scenes covering it, with cloud cover, a preview and the full reflectance data. EMIT only covers ±52° latitude and passes irregularly. Methane plume detections can be shown on the map.</li>
-        <li><strong>MODIS NDVI</strong>: plant greenness on land. <strong>PACE OCI chlorophyll</strong>: phytoplankton in the ocean. <strong>VIIRS</strong>: true colour.</li>
+        <li><strong>Ecosystem type</strong>: MODIS land cover (IGBP classes, 500 m, yearly). Forest, shrubland, savanna, grassland, wetland, cropland, urban, snow, barren.</li>
+        <li><strong>Human-shaped biomes</strong>: Anthromes (Ellis &amp; Ramankutty 2008). Wildlands, rangelands, villages, croplands, cities.</li>
+        <li><strong>Vegetation greenness</strong>: MODIS NDVI, 8-day.</li>
+        <li><strong>Canopy height</strong>: NASA GEDI lidar, 2019–2023. Tall, layered canopy means more reverberation and more vertical niches for calling animals.</li>
+        <li><strong>Night lights</strong>: NASA Black Marble. A rough proxy for roads, settlements and the noise that comes with them.</li>
+        <li><strong>Human footprint</strong>: WCS &amp; CIESIN (Sanderson et al. 2002). Combined pressure from population, land use, roads and lights.</li>
+        <li><strong>Protected areas</strong>: the World Database on Protected Areas (UNEP-WCMC &amp; IUCN).</li>
+        <li><strong>Terrain shading</strong>: Esri hillshade. Valleys and ridges shape how sound travels.</li>
+        <li><strong>EMIT</strong> (imaging spectrometer on the ISS, 285 bands, 60 m): scenes over each site, and methane plume detections.</li>
       </ul>
+      <p>Google's AlphaEarth satellite embeddings would be a great fit, but they are only served through Earth Engine, which needs an account, so they are left out.</p>
       <h3>The balance index</h3>
       <p>Each station gets a <strong>Soundscape Balance Index</strong> from 0 to 100, built from its last 24 hours of recognitions. The index is this project's own experimental composite; every ingredient is a published metric:</p>
       <ul>
@@ -107,122 +242,23 @@
         <li>Kasten E.P. et al. (2012) The remote environmental assessment laboratory's acoustic library. <em>Ecological Informatics</em> 12: 50–67.</li>
         <li>Kogan F.N. (1995) Application of vegetation index and brightness temperature for drought detection. <em>Adv. Space Research</em> 15: 91–100.</li>
         <li>Pielou E.C. (1966) The measurement of diversity in different types of biological collections. <em>J. Theoretical Biology</em> 13: 131–144.</li>
+        <li>Ellis E.C. &amp; Ramankutty N. (2008) Putting people in the map: anthropogenic biomes of the world. <em>Frontiers in Ecology and the Environment</em> 6: 439–447.</li>
         <li>Pijanowski B.C. et al. (2011) Soundscape ecology: the science of sound in the landscape. <em>BioScience</em> 61: 203–216.</li>
+        <li>Sanderson E.W. et al. (2002) The human footprint and the last of the wild. <em>BioScience</em> 52: 891–904.</li>
         <li>Sueur J. et al. (2008) Rapid acoustic survey for biodiversity appraisal. <em>PLoS ONE</em> 3: e4065.</li>
         <li>Villanueva-Rivera L.J. et al. (2011) A primer of acoustic analysis for landscape ecologists. <em>Landscape Ecology</em> 26: 1233–1246.</li>
       </ul>
+      <h3>Field Studio</h3>
+      <p>Every recording is checked in your browser before you hear it: the signal-to-noise ratio in the band where the call is strongest (loud frames in the detection window against quiet frames outside it), plus peak and RMS level. Near-silent and very noisy clips are hidden, and the rest play levelled to the same loudness. For kits, each sound is also measured for <em>tonality</em>: how far its strongest spectral peak rises above the rest, at what frequency, and how much that pitch wanders. Steady whistles become the tuned voices, retuned into one key chosen to need the least correction; broadband, fast-attack sounds become drums.</p>
       <h3>Credits</h3>
-      <p class="small">Data: <a href="https://www.birdweather.com" target="_blank" rel="noopener">BirdWeather</a> &amp; <a href="https://birdnet.cornell.edu" target="_blank" rel="noopener">BirdNET</a> (K. Lisa Yang Center, Cornell Lab of Ornithology / TU Chemnitz), <a href="https://www.orcasound.net" target="_blank" rel="noopener">Orcasound</a>, NASA <a href="https://earth.jpl.nasa.gov/emit/" target="_blank" rel="noopener">EMIT</a> via <a href="https://lpdaac.usgs.gov" target="_blank" rel="noopener">LP DAAC</a> &amp; CMR, NASA <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noopener">GIBS</a>, MODIS via <a href="https://modis.ornl.gov" target="_blank" rel="noopener">ORNL DAAC</a>. Basemap © Esri, HERE, Garmin, OpenStreetMap contributors. Made by <a href="https://anishohmyghosh.github.io/website/" target="_blank" rel="noopener">Anish Ghosh</a>.</p>
+      <p class="small">Data: <a href="https://www.birdweather.com" target="_blank" rel="noopener">BirdWeather</a> &amp; <a href="https://birdnet.cornell.edu" target="_blank" rel="noopener">BirdNET</a> (K. Lisa Yang Center, Cornell Lab of Ornithology / TU Chemnitz), <a href="https://www.orcasound.net" target="_blank" rel="noopener">Orcasound</a>, NASA <a href="https://earth.jpl.nasa.gov/emit/" target="_blank" rel="noopener">EMIT</a> via <a href="https://lpdaac.usgs.gov" target="_blank" rel="noopener">LP DAAC</a> &amp; CMR, NASA <a href="https://nasa-gibs.github.io/gibs-api-docs/" target="_blank" rel="noopener">GIBS</a>, MODIS via <a href="https://modis.ornl.gov" target="_blank" rel="noopener">ORNL DAAC</a>, protected areas from <a href="https://www.protectedplanet.net" target="_blank" rel="noopener">Protected Planet</a> (UNEP-WCMC &amp; IUCN). Basemap © Esri, HERE, Garmin, OpenStreetMap contributors. Made by <a href="https://anishohmyghosh.github.io/website/" target="_blank" rel="noopener">Anish Ghosh</a>.</p>
     </div>
   </aside>
-</main>
-
-<footer class="player" id="player">
-  <button class="pbtn" id="pbtn" aria-label="Play a soundscape tour of the sites in view">
-    <svg id="icPlay" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg>
-    <svg id="icStop" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>
-  </button>
-  <button class="pnext" id="pnext" aria-label="Next clip" title="Next" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l8.5 6L6 18zM16 6h2.2v12H16z" fill="currentColor"/></svg></button>
-  <div class="pinfo">
-    <p class="ptitle" id="ptitle">Soundscape tour</p>
-    <p class="psub" id="psub">Press play to hear the sites in view, or tap any station or hydrophone</p>
-  </div>
-  <div class="spec">
-    <canvas id="spec"></canvas>
-    <div class="ticks" id="ticks"></div>
-  </div>
-  <label class="pvol"><span class="sr">Volume</span><input type="range" id="vol" min="0" max="1" step="0.01" value="0.8"></label>
-  <audio id="audio" crossorigin="anonymous" preload="none"></audio>
-</footer>
-
-
-<div class="studio" id="studio" hidden role="dialog" aria-modal="true" aria-labelledby="stTitle">
-  <div class="st-top">
-    <div class="st-brand">
-      <h2 id="stTitle">Field Studio <span class="beta">experiment</span></h2>
-      <p class="st-region"><span id="stRegion"></span> · <button class="linkish" id="stRebuild">change region on the map</button></p>
-    </div>
-    <div class="st-tabs" role="tablist">
-      <button role="tab" class="st-tab on" data-t="kit" aria-selected="true">Kit</button>
-      <button role="tab" class="st-tab" data-t="lib" aria-selected="false">Library</button>
-      <button role="tab" class="st-tab" data-t="rec" aria-selected="false">Field recorder</button>
-    </div>
-    <button class="btn ghost" id="stClose">← Back to map</button>
-  </div>
-
-  <section class="st-pane" id="st-kit">
-    <p class="st-status" id="kitStatus" role="status"></p>
-    <div class="kit-top">
-      <div class="pads" id="pads"></div>
-      <div class="editor" id="editor"></div>
-    </div>
-    <div class="transport">
-      <button class="btn" id="kPlay" aria-pressed="false">▶ Play</button>
-      <label class="tctl">Style
-        <select id="kStyle"><option>House</option><option>Boom bap</option><option>Breakbeat</option><option>Techno</option><option>Dembow</option><option>Dawn chorus</option></select></label>
-      <button class="btn ghost sm" id="kGen" title="Write a new pattern in this style">✦ Generate</button>
-      <button class="btn ghost sm" id="kMut" title="Change a few steps">Mutate</button>
-      <button class="btn ghost sm" id="kClear">Clear</button>
-      <label class="tctl">Tempo <input type="range" id="kBpm" min="60" max="180" value="96"><output id="kBpmV">96</output></label>
-      <label class="tctl">Swing <input type="range" id="kSwing" min="0" max="45" value="12"><output id="kSwingV">12%</output></label>
-      <span class="grow"></span>
-      <button class="btn ghost sm" id="kNew" title="Pick 8 new sounds from this region">↻ New kit</button>
-    </div>
-    <div class="seq" id="seq"></div>
-    <div class="exports">
-      <span class="lh">Export</span>
-      <button class="btn sm" id="kKit">⤓ Kit (.zip)</button>
-      <button class="btn ghost sm" id="kLoop">⤓ 4-bar loop (.wav)</button>
-      <button class="btn ghost sm" id="kMidi">⤓ Pattern (.mid)</button>
-      <span class="hint">Keys 1–8 play pads · space starts and stops · shift-click a step for an accent</span>
-    </div>
-  </section>
-
-  <section class="st-pane" id="st-lib" hidden>
-    <div class="lib-bar">
-      <input type="search" id="libSearch" placeholder="Search species, station or country" aria-label="Search sounds">
-      <div class="fchips" id="libChips"></div>
-      <label class="tctl">Sort <select id="libSort"><option value="new">Newest</option><option value="conf">Confidence</option><option value="species">Species A–Z</option></select></label>
-      <label class="tctl">Download <select id="libCut"><option value="call">Call only (±0.5 s)</option><option value="full">Full clip</option></select></label>
-      <button class="btn sm" id="libZip" disabled>Select sounds to pack</button>
-    </div>
-    <p class="hint" id="libMsg">Every recording BirdNET recognised in this region, newest first. Amber shading marks the call. Bat recordings keep their ultrasonic sample rate in downloads and play slowed ×10 so you can hear them. ＋ loads a sound onto the selected kit pad.</p>
-    <ul class="lib" id="libList"></ul>
-    <button class="btn ghost" id="libMore" hidden>Load more</button>
-  </section>
-
-  <section class="st-pane" id="st-rec" hidden>
-    <div class="rec">
-      <div class="rec-mics">
-        <h3>Mics</h3>
-        <p class="hint" id="recSel">Choose up to 4 mics</p>
-        <div id="recMics"></div>
-      </div>
-      <div class="rec-opts">
-        <h3>Ambience bed</h3>
-        <p class="hint">Stitches each mic's recent recordings into one continuous bed with crossfades, for film, games, installations or study. Picking a hydrophone records its live stream in real time.</p>
-        <p class="lh">Length</p>
-        <div class="seg" id="recLens"><button data-s="15" aria-pressed="false">15 s</button><button data-s="30" class="on" aria-pressed="true">30 s</button><button data-s="60" aria-pressed="false">1 min</button><button data-s="120" aria-pressed="false">2 min</button><button data-s="300" aria-pressed="false">5 min</button></div>
-        <div class="opt-grid">
-          <label>Channels <select id="recCh"><option value="2">Stereo (mics spread L–R)</option><option value="1">Mono</option></select></label>
-          <label>Bit depth <select id="recBits"><option value="24">48 kHz / 24-bit</option><option value="16">48 kHz / 16-bit</option></select></label>
-          <label>Crossfade <select id="recXf"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></label>
-          <label>Fade in/out <select id="recFade"><option value="0">None</option><option value="1" selected>1 s</option><option value="3">3 s</option></select></label>
-          <label>Peak level <select id="recPeak"><option value="-1">−1 dBFS</option><option value="-3" selected>−3 dBFS</option><option value="-6">−6 dBFS</option></select></label>
-          <label class="chk"><input type="checkbox" id="recHp" checked> Rumble cut (80 Hz high-pass)</label>
-          <label class="chk"><input type="checkbox" id="recLoop"> Seamless loop</label>
-        </div>
-        <button class="btn" id="recGo" disabled>● Build recording</button>
-        <p class="st-status" id="recMsg" role="status"></p>
-        <div id="recOut"></div>
-      </div>
-    </div>
-  </section>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
-<script type="module" src="app.js"></script>
-<script type="module" src="studio.js"></script>
+<script type="module" src="app.js?v=5"></script>
+<script type="module" src="studio.js?v=5"></script>
 </body>
 </html>
