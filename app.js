@@ -882,6 +882,18 @@ function startTour() {
     list = all.map(st => ({ st, note: `balance ${st.bal.sbi}` }));
   }
   if (!list.length) { setNow('Soundscape tour', 'Still gathering station data, try again in a moment'); return; }
+  if (around) {
+    // one request for every mic around the pin, then one recent clip per mic, nearest first
+    ensureAudio(); setBusy(true); pmode = 'tour'; const tok = ++ptok;
+    gql(`query($ids:[ID!]){ detections(first:80, stationIds:$ids, validSoundscape:true, confidenceGte:0.5){ nodes{ timestamp confidence species{ commonName } station{ id } soundscape{ url startTime endTime } } } }`, { ids: list.map(x => x.st.id) }).then(d => {
+      if (tok !== ptok) return;
+      const by = new Map(); for (const n of d.detections.nodes) if (n.soundscape?.url && !by.has(n.station.id)) by.set(n.station.id, n);
+      const items = list.filter(x => by.has(x.st.id)).map(({ st, note }) => { const n = by.get(st.id); return async () => ({ sc: n.soundscape, lat: st.lat, lon: st.lon, title: `${st.name} · ${note}`, sub: `${n.species.commonName}, ${ago(n.timestamp)}` }); });
+      if (!items.length) { setBusy(false); pmode = 'idle'; setNow('Around the pin', 'No recent clips from these mics'); return; }
+      setPlaylist(items, 'tour');
+    }).catch(() => { if (tok === ptok) { setBusy(false); pmode = 'idle'; setNow('Around the pin', 'Could not reach the mics, try again'); } });
+    return;
+  }
   setPlaylist(list.map(({ st, note }) => async () => {
     const d = (await gql(RECENT, { id: st.id })).station;
     const n = d?.detections?.nodes?.find(x => x.soundscape?.url);
