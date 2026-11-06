@@ -613,7 +613,7 @@ function drawPeaks(cv, peaks, opts = {}) {
 const NS = 'http://www.w3.org/2000/svg';
 const svgEl = (tag, attrs = {}) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
 const arc = (cx, cy, r, a0, a1) => { const p = a => [cx + r * Math.cos(a), cy + r * Math.sin(a)], [x0, y0] = p(a0), [x1, y1] = p(a1); return `M${x0},${y0} A${r},${r} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${x1},${y1}`; };
-// Drag up/down (shift for fine), scroll, arrow keys; double-click resets.
+// Drag up/down (shift for fine) or arrow keys; double-click resets. No scroll-wheel, so scrolling the page never changes anything.
 function knob({ label, min, max, value, def = value, log, step, fmt, onInput, onChange, size = '' }) {
   const L0 = log ? Math.log(min) : min, L1 = log ? Math.log(max) : max;
   const toN = v => ((log ? Math.log(v) : v) - L0) / (L1 - L0);
@@ -623,7 +623,7 @@ function knob({ label, min, max, value, def = value, log, step, fmt, onInput, on
   const svg = svgEl('svg', { viewBox: '0 0 40 40', 'aria-hidden': 'true' });
   const track = svgEl('path', { class: 'k-track', d: arc(20, 20, 15, A0, A1) }), val = svgEl('path', { class: 'k-val' }), dot = svgEl('line', { class: 'k-dot' });
   svg.append(track, val, dot);
-  const out = h('output', {}), el = h('div', { class: 'knob ' + size, tabindex: 0, role: 'slider', 'aria-label': label, title: `${label} · drag, scroll or arrow keys · double-click to reset` }, svg, h('span', { class: 'k-l' }, label), out);
+  const out = h('output', {}), el = h('div', { class: 'knob ' + size, tabindex: 0, role: 'slider', 'aria-label': label, title: `${label} · drag up/down or use arrow keys · double-click to reset` }, svg, h('span', { class: 'k-l' }, label), out);
   const draw = () => {
     const a = A0 + n * (A1 - A0);
     val.setAttribute('d', n > 0.002 ? arc(20, 20, 15, A0, a) : '');
@@ -639,7 +639,6 @@ function knob({ label, min, max, value, def = value, log, step, fmt, onInput, on
     el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up, { once: true }); el.addEventListener('pointercancel', up, { once: true });
   });
   el.addEventListener('dblclick', () => set(toN(def), true));
-  el.addEventListener('wheel', e => { e.preventDefault(); set(n - Math.sign(e.deltaY) * (e.shiftKey ? 0.005 : 0.025)); clearTimeout(el._t); el._t = setTimeout(() => onChange?.(frN(n)), 250); }, { passive: false });
   el.addEventListener('keydown', e => { const d = { ArrowUp: 0.02, ArrowRight: 0.02, ArrowDown: -0.02, ArrowLeft: -0.02, PageUp: 0.1, PageDown: -0.1 }[e.key]; if (d) { e.preventDefault(); e.stopPropagation(); set(n + d, true); } });
   el.update = v => { n = clamp(toN(v), 0, 1); draw(); };
   draw();
@@ -792,7 +791,7 @@ function paintCell(b, i, j) {
   b.classList.toggle('on', !!v); b.setAttribute('aria-pressed', !!v); b.setAttribute('aria-label', cellLabel(i, j));
   b.style.setProperty('--v', v || 0); b.style.setProperty('--d', (clamp(notes[i][j], -2, 6) + 2) / 8);
   b.replaceChildren(...(r.tonal && v ? [h('i', { class: 'deg' })] : []));
-  b.title = r.tonal && v && pads[i]?.m0 != null ? `${noteName(pads[i].m0 + semis(pads[i], notes[i][j]))} · scroll to change the note` : '';
+  b.title = r.tonal && v && pads[i]?.m0 != null ? `${noteName(pads[i].m0 + semis(pads[i], notes[i][j]))} · alt-click for a higher note, alt+shift-click for lower` : '';
 }
 function renderSeq() {
   const el = $('seq'), cols = [];
@@ -806,10 +805,14 @@ function renderSeq() {
         paintCell(b, i, j);
         if (on && pads[i] && !playing) trigger(pads[i], audioCtx().currentTime + 0.005, pattern[i][j], gateFor(i), undefined, undefined, notes[i][j]);
       };
-      b.addEventListener('pointerdown', e => { if (e.button) return; e.preventDefault(); paint = { on: !pattern[i][j], row: i }; apply(paint.on, e.shiftKey); });
+      b.addEventListener('pointerdown', e => {
+        if (e.button) return; e.preventDefault();
+        // alt-click a melody step: up a note (alt+shift: down)
+        if (e.altKey && r.tonal && pattern[i][j]) { notes[i][j] = clamp(notes[i][j] + (e.shiftKey ? -1 : 1), -2, 6); paintCell(b, i, j); if (pads[i] && !playing) trigger(pads[i], audioCtx().currentTime + 0.005, 0.8, gateFor(i), undefined, undefined, notes[i][j]); return; }
+        paint = { on: !pattern[i][j], row: i }; apply(paint.on, e.shiftKey);
+      });
       b.addEventListener('pointerenter', e => { if (paint && (e.buttons & 1) && paint.row === i) apply(paint.on); });
       b.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); apply(!pattern[i][j], e.shiftKey); } });
-      if (r.tonal) b.addEventListener('wheel', e => { if (!pattern[i][j]) return; e.preventDefault(); notes[i][j] = clamp(notes[i][j] + (e.deltaY < 0 ? 1 : -1), -2, 6); paintCell(b, i, j); if (pads[i] && !playing) trigger(pads[i], audioCtx().currentTime + 0.005, 0.8, gateFor(i), undefined, undefined, notes[i][j]); }, { passive: false });
       return b;
     })));
   }
@@ -1166,12 +1169,12 @@ function suggest() {
   for (const sp of spots) {
     const c = sp.a[0].country || '?'; if (used.has(c)) continue; used.add(c);
     const top = [...sp.a].sort((x, y) => y.bal.sbi - x.bal.sbi)[0];
-    out.push({ lat: top.lat, lon: top.lon, label: `${top.state ? top.state + ', ' : ''}${top.country || ''}`, sub: `${sp.a.length} mics · balance ${Math.round(sp.med)}` });
+    out.push({ lat: top.lat, lon: top.lon, label: `${top.state ? top.state + ', ' : ''}${top.country || ''}`, sub: sp.med >= 65 ? 'Very lively right now' : 'Lively right now' });
     if (out.length >= 6) break;
   }
   const hy = [...hydros.values()].find(x => x.live);
-  if (hy) out.push({ lat: hy.lat, lon: hy.lon, label: 'Salish Sea, underwater', sub: 'live hydrophones' });
-  $('stSuggest').replaceChildren(...(out.length ? out.map(o => h('button', { class: 'suggest', onclick: () => B().dropPin(o.lat, o.lon) }, h('b', {}, o.label), h('span', {}, o.sub))) : [h('p', { class: 'hint' }, 'Gathering today\'s recordings from every station…')]));
+  if (hy) out.push({ lat: hy.lat, lon: hy.lon, label: 'Salish Sea', sub: 'Underwater, live' });
+  $('stSuggest').replaceChildren(...(out.length ? out.map(o => h('button', { class: 'suggest', onclick: () => { B().map.easeTo({ center: [o.lon, o.lat], duration: 900 }); B().dropPin(o.lat, o.lon); } }, h('b', {}, o.label), h('span', {}, o.sub))) : [h('p', { class: 'hint' }, 'Finding lively places…')]));
 }
 window.addEventListener('biophony:data', () => { suggest(); if (region && tab === 'rec' && !recBusy) renderRec(); });
 $('stSite').addEventListener('click', () => { const s = region?.near[0]?.st; if (s) B().openStation(s.id); });

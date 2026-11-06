@@ -9,14 +9,14 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,400&family=Manrope:wght@400;500;700&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=9">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%230f1d1f'/%3E%3Cpath d='M6 16h3l2-6 3 12 3-9 2 5 2-2h5' stroke='%2378d6c0' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 </head>
 <body>
 <header class="top">
   <div class="brand">
     <h1>Biophony</h1>
-    <p class="sub">Drop a pin, hear the planet, make something from it. <span class="dot" id="liveDot"></span><span id="liveText">connecting…</span></p>
+    <p class="sub">Hear any place on Earth, then make something from it. <span class="dot" id="liveDot"></span><span id="liveText">connecting…</span></p>
   </div>
   <button class="btn ghost" id="openInfo" aria-controls="info">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
@@ -51,7 +51,7 @@
         <label><input type="checkbox" id="lyMethane"> EMIT methane plumes</label>
       </div>
     </details>
-    <p class="pin-hint" id="pinHint">Click anywhere on the globe to drop a pin</p>
+    <p class="pin-hint" id="pinHint">Click anywhere to listen</p>
 
     <footer class="player" id="player">
       <button class="pbtn" id="pbtn" aria-label="Play" aria-pressed="false">
@@ -73,8 +73,8 @@
     <div class="st-top">
       <div class="st-brand">
         <p class="kicker" id="stTitle">Field Studio</p>
-        <h2 id="stRegion">Drop a pin</h2>
-        <p class="st-region"><span id="stRegionSub">Kits, sounds and ambience from the mics nearest your pin</span> <button class="linkish" id="stSite" hidden>site health</button></p>
+        <h2 id="stRegion">Pick a place</h2>
+        <p class="st-region"><span id="stRegionSub">Sounds from real microphones, live</span> <button class="linkish" id="stSite" hidden>site health</button></p>
       </div>
       <div class="st-right">
         <div class="seg sm" id="pinN" role="group" aria-label="How many mics"><span>Mics</span><button data-n="6" aria-pressed="false">6</button><button data-n="12" class="on" aria-pressed="true">12</button><button data-n="24" aria-pressed="false">24</button><button data-n="48" aria-pressed="false">48</button></div>
@@ -87,13 +87,13 @@
     </div>
 
     <div class="st-empty" id="stEmpty">
-      <p>Click anywhere on the globe. Biophony gathers the nearest listening stations (widening the circle if the area is thin), checks every recording for noise and silence, and turns what's left into:</p>
-      <ul class="st-what">
-        <li><b>Kit</b> 8 pads with a sequencer. Steady calls become a tuned low tom and lead in one key, noisy hits become drums, the brightest wash becomes a crash.</li>
-        <li><b>Library</b> clean recordings to audition and download, levelled to the same loudness.</li>
-        <li><b>Field recorder</b> pick mics nearby and stitch an ambience bed for film, or record a hydrophone live.</li>
-      </ul>
-      <p class="lh">Rich right now</p>
+      <h2 class="st-hello">Click anywhere on the globe to hear it.</h2>
+      <ol class="st-steps">
+        <li><b>1</b><span>Click a place</span></li>
+        <li><b>2</b><span>Play what the nearby mics heard</span></li>
+        <li><b>3</b><span>Make a beat, grab sounds or record ambience</span></li>
+      </ol>
+      <p class="lh">Or start here</p>
       <div class="st-suggest" id="stSuggest"></div>
     </div>
 
@@ -124,7 +124,7 @@
         <button class="btn sm" id="kKit">⤓ Kit (.zip)</button>
         <button class="btn ghost sm" id="kLoop">⤓ 4-bar loop (.wav)</button>
         <button class="btn ghost sm" id="kMidi">⤓ Pattern (.mid)</button>
-        <span class="hint">Keys 1–8 play pads · space plays · drag across steps to paint · shift for accent · scroll a melody step to change its note · drag knobs, double-click to reset</span>
+        <span class="hint">Keys 1–8 play pads · space plays · drag across steps to paint · shift for accent · alt-click a melody step to raise its note (alt+shift lowers) · drag knobs, double-click to reset</span>
       </div>
     </section>
 
@@ -259,7 +259,7 @@
 
 <script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
-<script type="module" src="app.js?v=7"></script>
-<script type="module" src="studio.js?v=7"></script>
+<script type="module" src="app.js?v=9"></script>
+<script type="module" src="studio.js?v=9"></script>
 </body>
 </html>

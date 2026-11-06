@@ -480,3 +480,11 @@ body.dragging .pad { border-style: dashed; }
   .mtr { display: none; }
 }
 .lib-sent { list-style: none; min-height: 28px; text-align: center; font-size: .72rem; color: var(--muted); padding: 8px; }
+.st-empty { padding: 34px 22px 40px; max-width: 620px; }
+.st-hello { font-size: 2.3rem; line-height: 1.08; margin-bottom: 22px; }
+.st-steps { list-style: none; padding: 0; margin: 0 0 30px; display: grid; gap: 10px; }
+.st-steps li { display: flex; align-items: center; gap: 12px; font-size: .95rem; color: #c9d6d3; }
+.st-steps b { width: 28px; height: 28px; flex: none; border-radius: 50%; display: grid; place-items: center; background: rgba(120,214,192,.14); border: 1px solid var(--teal); color: var(--teal); font-size: .8rem; }
+.suggest { padding: 12px 14px; }
+.suggest b { font-size: .88rem; }
+@media (max-width: 640px) { .st-hello { font-size: 1.8rem; } }
