@@ -1,5 +1,6 @@
 // Field Studio: kits, a sound library and an ambience recorder built from the mics around the pin.
 const B = () => window.biophony;
+const SILENT = 'data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQgAAAAAAAAAAAAAAA==';
 const $ = id => document.getElementById(id);
 const h = (...a) => B().h(...a);
 const COL = c => B().COLORS[c] || B().COLORS.bird;
@@ -61,6 +62,8 @@ function playBuffer(buf, { rate = 1, gain = 1, from = 0, dur, onEnd } = {}) {
   return { stop: () => { s.onended = null; try { s.stop(); } catch { } } };
 }
 window.addEventListener('biophony:mainplay', () => { stopMon(); togglePlay(false); });
+// Safari: create/resume the studio's audio inside the first click, before any fetch can break the gesture.
+['pointerdown', 'keydown', 'touchend'].forEach(t => document.addEventListener(t, () => { if (!ctx || ctx.state !== 'running') audioCtx(); }, { capture: true, passive: true }));
 
 // ---------------- data ----------------
 const FRAG = `id timestamp confidence species{ id commonName scientificName classification thumbnailUrl } station{ id name country state coords{lat lon} } soundscape{ url startTime endTime duration sampleRate }`;
@@ -276,7 +279,7 @@ const ROLES = [
   { k: 'lead', name: 'Lead', key: '7', ch: 1, tonal: true, lvl: -21, A: 0.006, D: 0.25, S: 0.55, R: 0.15, hp: 120, lp: 10000, max: 0.7, steps: 1.6 },
   { k: 'crash', name: 'Crash', key: '8', note: 49, lvl: -29, A: 0.004, D: 1.8, S: 0, R: 0.6, hp: 2800, lp: 13000, max: 1.4, gate: 0.05, verb: 0.5, bar4: true },
 ];
-let pads = [], selPad = 0, candidates = [], kitBusy = false, widen = false;
+let pads = [], selPad = 0, candidates = [], kitBusy = false, widen = false, widenDone = -1;
 
 async function analyse(snd) {
   const buf = await decode(snd), ins = await inspect(snd), tx = TX(snd);
@@ -351,7 +354,7 @@ async function buildKit() {
       st.textContent = `Checking recordings for noise and silence… ${good.length} clean of ${tried}`;
     }
     const nSp = new Set(good.map(c => c.snd.sp.id)).size;
-    if (nSp < 6 && region.near.length < 48) { widen = true; st.textContent = `Only ${nSp} clean species within ${B().kmTxt(region.radius)}. Widening the circle…`; return; }
+    if (nSp < 6 && widenDone !== gen) { widen = true; st.textContent = `Only ${nSp} clean species within ${B().kmTxt(region.radius)}. Widening the circle…`; return; }
     const cands = good.length >= 8 ? good : [...good, ...noisy.sort((a, b) => b.ins.snr - a.ins.snr)].slice(0, Math.max(8, good.length));
     if (cands.length < 3) { st.textContent = 'The recordings near this pin are too quiet or noisy for a kit. Try a busier area, or more mics.'; return; }
     candidates = cands;
@@ -362,7 +365,7 @@ async function buildKit() {
     const nTonal = pads.filter(p => p.m0 != null).length;
     st.textContent = `Kit from ${new Set(pads.map(p => p.snd.sp.id)).size} species near ${region.label}. ${nTonal} tonal call${nTonal === 1 ? '' : 's'} tuned to ${NOTE[key.root]} ${key.scale}${good.length < 8 ? ', some recordings are noisy here' : ''}. Press space to play.`;
   } catch (e) { st.textContent = 'Could not build a kit: ' + e.message; }
-  finally { kitBusy = false; if (widen && g === gen) { widen = false; B().expandPin(); } widen = false; }
+  finally { kitBusy = false; if (widen && g === gen) { widen = false; if (!B().expandPin()) { widenDone = gen; if (tab === 'kit') { kitFor = gen; buildKit(); } else kitFor = -1; } } widen = false; }
 }
 async function swapPad(i, snd) {
   const p = pads[i]; if (!p) return;
@@ -848,9 +851,9 @@ function inspectPool(n = 24) {
     const passing = libItems().length, left = pool.some(x => !x.ins && !x.insErr && !x.insQueued);
     if (passing < libShown && left) { inspectPool(); return; }
     if (passing < libShown && poolMore) { loadPool(true).then(() => { if (g === gen) inspectPool(); }); return; }
-    if (passing < 10 && region.near.length < 48) {
+    if (passing < 10 && widenDone !== gen) {
       $('libMsg').textContent = `Few clean recordings within ${B().kmTxt(region.radius)}. Widening the circle…`;
-      setTimeout(() => { if (g === gen) B().expandPin(); }, 400);
+      setTimeout(() => { if (g === gen && !B().expandPin()) { widenDone = gen; renderLib(); } }, 400);
       return;
     }
     renderLib();
@@ -991,10 +994,11 @@ function previewStation(st, btn, row) {
   }, 's:' + st.id).catch(() => { $('recMsg').textContent = `${st.name} has no audible recent audio.`; });
 }
 function previewHydro(hy, btn, row) {
+  const el = new Audio(); el.crossOrigin = 'anonymous';
+  el.src = SILENT; el.play().catch(() => {});          // claim the click for this element (Safari)
   return startMon(btn, row, async () => {
     if (!(await B().hydroStatus(hy))) throw new Error('offline');
     audioCtx();
-    const el = new Audio(); el.crossOrigin = 'anonymous';
     let hls = null;
     if (window.Hls?.isSupported()) { hls = new Hls({ liveSyncDuration: 20 }); hls.loadSource(hy.url); hls.attachMedia(el); } else el.src = hy.url;
     const s = ctx.createMediaElementSource(el), g = ctx.createGain(); g.gain.value = 2; s.connect(g); g.connect(master);
@@ -1101,9 +1105,10 @@ async function buildBed() {
 }
 async function recordHydro(hy, secs, msg) {
   if (!hy) throw new Error('hydrophone not found');
+  const el = new Audio(); el.crossOrigin = 'anonymous';
+  el.src = SILENT; el.play().catch(() => {});          // claim the click for this element (Safari)
   const live = await B().hydroStatus(hy); if (!live) throw new Error('this hydrophone is offline right now');
   audioCtx();
-  const el = new Audio(); el.crossOrigin = 'anonymous';
   let hls = null;
   if (window.Hls?.isSupported()) { hls = new Hls({ liveSyncDuration: 20 }); hls.loadSource(hy.url); hls.attachMedia(el); } else el.src = hy.url;
   const s = ctx.createMediaElementSource(el), dest = ctx.createMediaStreamDestination(), monG = ctx.createGain(); monG.gain.value = 0.5;
@@ -1151,7 +1156,7 @@ function showStudioTab(t) {
 window.addEventListener('biophony:pin', e => {
   togglePlay(false); stopMon();
   setRegion(e.detail);
-  document.querySelectorAll('#pinN button').forEach(x => { const on = +x.dataset.n === e.detail.near.length || (+x.dataset.n === 48 && e.detail.near.length > 24); x.classList.toggle('on', on); x.setAttribute('aria-pressed', on); });
+  document.querySelectorAll('#pinN button').forEach(x => { const n = +x.dataset.n, on = e.detail.autoN ? n === 0 : n === e.detail.near.length || (n === 48 && e.detail.near.length > 24); x.classList.toggle('on', on); x.setAttribute('aria-pressed', on); });
   pads = []; candidates = []; libSel.clear(); libShown = 10; scrolled = false; libCur = null; micScoreFor = -1; recMics.clear(); recResult = null;
   $('recOut').replaceChildren(); $('pads').replaceChildren(); $('editor').replaceChildren(); $('libList').replaceChildren(); $('kitStatus').textContent = e.detail.auto ? `Widened to ${e.detail.near.length} mics within ${B().kmTxt(e.detail.radius)}…` : '';
   $('stEmpty').hidden = true; $('stBody').hidden = false;

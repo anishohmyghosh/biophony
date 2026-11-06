@@ -302,7 +302,7 @@ map.on('click', e => {
 });
 
 // ---------------- the pin: nearest mics around a point ----------------
-let pin = null, pinN = 12, pinMarker = null;
+let pin = null, pinN = 12, pinAuto = true, pinMaxKm = 200, pinMarker = null;
 function circle(lat, lon, r) {
   const pts = [], R = 6371, d = r / R, la = lat * Math.PI / 180, lo = lon * Math.PI / 180;
   for (let i = 0; i <= 64; i++) {
@@ -321,7 +321,10 @@ function placeLabel(list) {
   return c.slice(0, 2).map(x => x[0]).join(' & ');
 }
 function dropPin(lat, lon, auto = false) {
-  const near = [...stations.values()].map(st => ({ st, km: km(lat, lon, st.lat, st.lon) })).sort((a, b) => a.km - b.km).slice(0, pinN);
+  if (!auto && pinAuto) { pinN = 12; pinMaxKm = 200; }   // a fresh pin in Auto starts from 12 mics within ~200 km
+  let near = [...stations.values()].map(st => ({ st, km: km(lat, lon, st.lat, st.lon) })).sort((a, b) => a.km - b.km).slice(0, pinN);
+  // Auto: drop mics that would make the circle huge, but always keep the nearest 4
+  if (pinAuto) near = near.filter((o, i) => i < 4 || o.km <= pinMaxKm);
   const hy = [...hydros.values()].map(x => ({ hy: x, km: km(lat, lon, x.lat, x.lon) })).filter(o => o.km < 250).sort((a, b) => a.km - b.km);
   const radius = near.length ? near.at(-1).km : 0;
   pin = { lat, lon, near, hydros: hy, radius, label: placeLabel(near.slice(0, 6).map(o => o.st)) };
@@ -334,12 +337,17 @@ function dropPin(lat, lon, auto = false) {
   $('pinHint').hidden = true;
   setNow('Around the pin', `${pin.label} · press play to hear the ${near.length} nearest mics`);
   if (pmode !== 'live') { pmode = 'idle'; pnext.disabled = true; }
-  pin.auto = auto;
+  pin.auto = auto; pin.autoN = pinAuto;
   window.dispatchEvent(new CustomEvent('biophony:pin', { detail: pin }));
 }
-function repin(n) { pinN = n; if (pin) dropPin(pin.lat, pin.lon); }
+function repin(n) { pinAuto = !n; pinN = n || 12; pinMaxKm = 200; if (pin) dropPin(pin.lat, pin.lon); }
 // Thin area: double the number of mics (up to 48) and widen the circle. Returns false when already at the limit.
-function expandPin() { if (!pin || pinN >= 48) return false; pinN = Math.min(48, pinN * 2); dropPin(pin.lat, pin.lon, true); return true; }
+function expandPin() {
+  if (!pin) return false;
+  if (pinAuto) { if (pinMaxKm >= 800 && pinN >= 24) return false; pinMaxKm = Math.min(800, pinMaxKm * 2); if (pin.near.length >= pinN) pinN = Math.min(24, pinN * 2); }
+  else { if (pinN >= 48) return false; pinN = Math.min(48, pinN * 2); }
+  dropPin(pin.lat, pin.lon, true); return true;
+}
 
 // ---------------- balance pane (in the Balance & info drawer) ----------------
 const balEl = $('bal');
@@ -463,7 +471,7 @@ async function loadHydros() {
 
 function pulse(lat, lon, col) {
   if (!inB(map.getBounds(), lat, lon)) return;
-  const el = h('div', { class: 'pulse', style: `--c:${col}` });
+  const el = h('div', { class: 'pulse-m' }, h('div', { class: 'pulse', style: `--c:${col}` }));   // MapLibre positions the outer element with transform, so only the inner one animates
   const m = new maplibregl.Marker({ element: el }).setLngLat([lon, lat]).addTo(map);
   setTimeout(() => m.remove(), 2500);
 }
@@ -811,6 +819,24 @@ function ensureAudio() {
   drawTicks();
 }
 function stopHls() { if (hls) { hls.destroy(); hls = null; } }
+// Safari only lets audio start inside a click, and clips here start after a network fetch.
+// So on the first click anywhere, resume the audio graph and play the <audio> element once
+// (silently); after that Safari lets the same element play whenever we ask.
+const SILENT = 'data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQgAAAAAAAAAAAAAAA==';
+let unlocked = false, unlocking = false;
+function unlock() {
+  ensureAudio();
+  if (unlocked) return;
+  unlocked = true;
+  if (audio.paused && !audio.getAttribute('src')) {
+    // play() inside the gesture is what Safari remembers; pause straight away so nothing is left "playing"
+    unlocking = true; audio.src = SILENT;
+    audio.play().catch(() => {}); audio.pause();
+    setTimeout(() => { if (audio.getAttribute('src') === SILENT) { audio.removeAttribute('src'); audio.load(); $('player').classList.remove('busy', 'playing'); } unlocking = false; }, 300);
+  }
+}
+['pointerdown', 'keydown', 'touchend'].forEach(t => document.addEventListener(t, unlock, { capture: true, passive: true }));
+const real = () => !unlocking && !(audio.currentSrc || '').startsWith('data:');   // ignore events from the silent unlock clip
 function setNow(title, sub) { $('ptitle').textContent = title; $('psub').textContent = sub; }
 // One place decides the play/pause look: a class on the player swaps the icons in CSS.
 function setIcon(on) { $('player').classList.toggle('playing', on); pbtn.setAttribute('aria-label', on ? 'Pause' : 'Play'); pbtn.setAttribute('aria-pressed', on); }
@@ -886,15 +912,15 @@ async function playHydro(fid) {
   } catch (e) { if (tok === ptok) { setBusy(false); pmode = 'idle'; $('psub').textContent = 'Stream unavailable right now.'; } }
 }
 function pauseMain() { ++ptok; advancing = false; stopHls(); audio.pause(); setBusy(false); setIcon(false); if (pmode === 'live') pmode = 'idle'; }
-audio.addEventListener('timeupdate', () => { if (clipEnd && audio.currentTime > clipEnd && !audio.paused) { audio.pause(); advance(); } });
-audio.addEventListener('ended', () => advance());
-audio.addEventListener('playing', () => setBusy(false));
-audio.addEventListener('waiting', () => setBusy(true));
-audio.addEventListener('play', () => { setIcon(true); loop(); window.dispatchEvent(new Event('biophony:mainplay')); });
-audio.addEventListener('pause', () => { if (!advancing) setIcon(false); $('player').classList.remove('busy'); });
+audio.addEventListener('timeupdate', () => { if (real() && clipEnd && audio.currentTime > clipEnd && !audio.paused) { audio.pause(); advance(); } });
+audio.addEventListener('ended', () => { if (real()) advance(); });
+audio.addEventListener('playing', () => { if (real()) setBusy(false); });
+audio.addEventListener('waiting', () => { if (real()) setBusy(true); });
+audio.addEventListener('play', () => { if (!real()) return; setIcon(true); loop(); window.dispatchEvent(new Event('biophony:mainplay')); });
+audio.addEventListener('pause', () => { if (!real()) return; if (!advancing) setIcon(false); $('player').classList.remove('busy'); });
 pbtn.addEventListener('click', () => {
-  if (!audio.paused || $('player').classList.contains('busy')) { pauseMain(); return; }
-  if (pmode === 'idle' || (!audio.src && !hls)) { startTour(); return; }
+  if ((!audio.paused && real()) || $('player').classList.contains('busy')) { pauseMain(); return; }
+  if (pmode === 'idle' || (!audio.getAttribute('src') && !hls)) { startTour(); return; }
   ensureAudio();
   if (clipEnd && audio.currentTime > clipEnd - 0.1) { playIndex(pi + 1); return; }
   audio.play().catch(() => {});
@@ -951,7 +977,7 @@ function loop() {
 
 // ---------------- shared with the studio ----------------
 window.biophony = { map, stations, hydros, gql, h, fft, ago, fmt, km, kmTxt, normCls, CLS, COLORS, sbiColor, hydroStatus, pauseMain, dropPin, repin, expandPin, openStation, openInfo, median,
-  get pin() { return pin; }, get analysing() { return analysing; } };
+  get pin() { return pin; }, get analysing() { return analysing; }, get playerLevel() { return level; } };
 
 // ---------------- polling + visibility ----------------
 const timers = [];
