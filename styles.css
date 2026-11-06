@@ -479,3 +479,4 @@ body.dragging .pad { border-style: dashed; }
   .lib-wv, .lib-tag { display: none; }
   .mtr { display: none; }
 }
+.lib-sent { list-style: none; min-height: 28px; text-align: center; font-size: .72rem; color: var(--muted); padding: 8px; }

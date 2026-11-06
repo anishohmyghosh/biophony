@@ -133,7 +133,7 @@ function inspect(snd) {
 }
 function inspectBuf(buf, snd) {
   const { fft } = B(), x = mono(buf), sr = buf.sampleRate, tx = TX(snd);
-  const N = 2 ** Math.round(Math.log2(sr * 0.021)), hop = N >> 1, K = N >> 1, bw = sr / N, win = hann(N);
+  const N = 2 ** Math.round(Math.log2(sr * 0.021)), hop = N, K = N >> 1, bw = sr / N, win = hann(N);   // no overlap: half the FFTs, same SNR estimate
   const fLo = tx > 1 ? 12000 : 250, fHi = Math.min(sr * 0.475, tx > 1 ? 150000 : 12000);
   const QB = 18, edges = []; for (let i = 0; i <= QB; i++) edges.push(clamp(Math.round(fLo * (fHi / fLo) ** (i / QB) / bw), 1, K - 1));
   const k0 = edges[0], k1 = edges[QB], nF = Math.max(0, Math.floor((x.length - N) / hop) + 1);
@@ -175,7 +175,10 @@ function inspectBuf(buf, snd) {
   const tonal = { prom: q(vf.map(f => pr[f]), 0.5), f0: q(vf.map(f => pf[f]), 0.5), spread: q(logs, 0.75) - q(logs, 0.25), voiced: voiced.length, tPeak };
   const label = base.peakDb < -78 || snr < 3 ? 'silent' : snr < 10 ? 'noisy' : snr < 16 ? 'ok' : 'clean';
   const gain = clamp(Math.min(10 ** ((-20 - callRmsDb) / 20), 0.95 / Math.max(1e-6, cp)), 0.3, 1000);   // field recorders often peak near -50 dBFS
-  return { ...base, snr, label, gain, callRmsDb, band: Math.sqrt(edges[bestB] * edges[bestB + 3 > QB ? QB : bestB + 3]) * bw / tx, tonal };
+  const bandE = new Float64Array(QB); for (let f = 0; f < nF; f++) for (let k = 0; k < QB; k++) bandE[k] += E[f * QB + k];
+  let bt = 0; for (const v of bandE) bt += v; let ent = 0; if (bt > 0) for (const v of bandE) { const pp = v / bt; if (pp > 0) ent -= pp * Math.log(pp); }
+  const eq = ent / Math.log(QB);   // Shannon evenness of energy across log-spaced bands: 1 = pink-balanced, 0 = one band dominates
+  return { ...base, snr, label, gain, callRmsDb, eq, band: Math.sqrt(edges[bestB] * edges[bestB + 3 > QB ? QB : bestB + 3]) * bw / tx, tonal };
 }
 
 function stft(x, N) {
@@ -822,24 +825,47 @@ function renderSeq() {
 }
 
 // ---------------- library ----------------
-let libFilter = 'all', libQuery = '', libSort = 'snr', libSel = new Set(), libCut = 'call', libQ = 10, libRaf = 0, inspecting = 0;
+let libFilter = 'all', libQuery = '', libSort = 'snr', libSel = new Set(), libCut = 'call', libQ = 10, libRaf = 0, inspecting = 0, libShown = 10;
 // Gain that brings a whole clip to a target RMS without pushing its peak past -1 dBFS.
 const lvl = (ins, target) => clamp(Math.min(10 ** ((target - ins.rmsDb) / 20), 0.9 / 10 ** (ins.peakDb / 20)), 0.3, 1000);
 const QLABEL = { clean: 'Clean', ok: 'Usable', noisy: 'Noisy', silent: 'Near-silent' };
-function inspectPool() {
-  const g = gen, todo = pool.filter(s => !s.ins && !s.insErr && !s.insQueued);
+// Library loads in waves: check the most promising recordings first (highest BirdNET confidence),
+// show the 10 cleanest, and check more only as the list is scrolled.
+function inspectPool(n = 24) {
+  const g = gen, todo = pool.filter(s => !s.ins && !s.insErr && !s.insQueued).sort((a, b) => b.conf - a.conf).slice(0, n);
+  if (!todo.length) return;
   todo.forEach(s => { s.insQueued = true; });
   inspecting += todo.length;
+  renderLib();
   mapLimit(todo, 6, async s => {
     try { s.ins = await inspect(s); } catch { s.insErr = true; }
     inspecting--;
     if (g !== gen) return;
-    cancelAnimationFrame(libRaf); libRaf = requestAnimationFrame(renderLib);
-    if (inspecting === 0 && region.near.length < 48 && pool.filter(x => x.ins && x.ins.label !== 'silent' && x.ins.snr >= Math.max(libQ, 10)).length < 15) {
+    if (inspecting > 0) { libProgress(); return; }
+    const passing = libItems().length, left = pool.some(x => !x.ins && !x.insErr && !x.insQueued);
+    if (passing < libShown && left) { inspectPool(); return; }
+    if (passing < libShown && poolMore) { loadPool(true).then(() => { if (g === gen) inspectPool(); }); return; }
+    if (passing < 10 && region.near.length < 48) {
       $('libMsg').textContent = `Few clean recordings within ${B().kmTxt(region.radius)}. Widening the circle…`;
       setTimeout(() => { if (g === gen) B().expandPin(); }, 400);
+      return;
     }
+    renderLib();
+    if (scrolled && nearEnd()) moreLib();
   });
+}
+function libProgress() { if (tab !== 'lib') return; const e = document.querySelector('#libList .lib-wait'); if (e) e.textContent = `Listening for the cleanest recordings… ${pool.filter(x => x.ins).length} checked`; }
+const sentinel = h('li', { class: 'lib-sent', 'aria-hidden': 'true' });
+// Load more only when the person scrolls near the end of the list.
+function nearEnd() { if (tab !== 'lib' || inspecting > 0 || !sentinel.isConnected) return false; const r = sentinel.getBoundingClientRect(); return r.top < innerHeight + 200; }
+let scrolled = false, quietUntil = 0;
+const onScroll = () => { if (performance.now() < quietUntil) return; scrolled = true; if (nearEnd()) moreLib(); };
+$('studio').addEventListener('scroll', onScroll, { passive: true });
+window.addEventListener('scroll', onScroll, { passive: true });
+function moreLib() {
+  const items = libItems();
+  if (libShown < items.length) { libShown += 10; renderLib(); }
+  if (items.length < libShown + 10) { if (pool.some(x => !x.ins && !x.insErr && !x.insQueued)) inspectPool(); else if (poolMore) { const g = gen; loadPool(true).then(() => { if (g === gen) inspectPool(); }); } }
 }
 function libItems() {
   let l = pool.filter(s => s.ins && (libQ < 0 || (s.ins.label !== 'silent' && s.ins.snr >= libQ)) && (libFilter === 'all' || s.cls === libFilter) && (!libQuery || `${s.sp.commonName} ${s.sp.scientificName} ${s.st?.name} ${s.st?.country}`.toLowerCase().includes(libQuery)));
@@ -886,21 +912,25 @@ async function downloadSel() {
 function updateSelBtn() { const b = $('libZip'); b.textContent = libSel.size ? `⤓ Download ${libSel.size} as ZIP` : 'Select sounds to pack'; b.disabled = !libSel.size; }
 function renderLib() {
   if (tab !== 'lib' || !region) return;
-  const list = $('libList'), items = libItems();
+  const list = $('libList'), items = libItems(), shown = items.slice(0, libShown);
   const done = pool.filter(s => s.ins), counts = {}; done.forEach(s => counts[s.cls] = (counts[s.cls] || 0) + 1);
   const hidden = done.filter(s => libQ >= 0 && (s.ins.label === 'silent' || s.ins.snr < libQ)), silent = hidden.filter(s => s.ins.label === 'silent').length;
   $('libChips').replaceChildren(...['all', 'bird', 'insect', 'amphibian', 'bat', 'mammal'].filter(c => c === 'all' || counts[c]).map(c => {
     const b = h('button', { class: 'fchip' + (libFilter === c ? ' on' : ''), 'aria-pressed': libFilter === c, style: c === 'all' ? '' : `--c:${COL(c)}` }, c === 'all' ? 'All' : `${LABEL(c)}s`);
-    b.addEventListener('click', () => { libFilter = c; renderLib(); });
+    b.addEventListener('click', () => { libFilter = c; libShown = 10; renderLib(); });
     return b;
   }));
   $('libMsg').textContent = !pool.length ? 'Loading recordings from the mics around the pin…'
-    : `${items.length} sound${items.length === 1 ? '' : 's'}${inspecting > 0 ? ` · checking ${inspecting} more for noise and silence…` : ''}${hidden.length ? ` · ${hidden.length} hidden (${silent ? `${silent} near-silent, ` : ''}${hidden.length - silent} too noisy)` : ''}. Click a row to play, ↑↓ to browse, drag onto a kit pad.`;
-  const old = new Map([...list.children].map(r => [r.dataset.id, r]));
-  const rows = items.map(s => old.get(s.id) || libRow(s));
-  list.replaceChildren(...rows);
-  if (!items.length) list.append(h('li', { class: 'empty' }, !pool.length || inspecting > 0 ? 'Listening through the recordings…' : 'No sounds pass the quality filter here. Set Quality to Everything, or drop the pin somewhere busier.'));
-  $('libMore').hidden = !poolMore;
+    : `Cleanest first · ${done.length} of ${pool.length}${poolMore ? '+' : ''} recordings checked${hidden.length ? `, ${hidden.length} hidden (${silent ? `${silent} near-silent, ` : ''}${hidden.length - silent} too noisy)` : ''}. Click a row to play, ↑↓ to browse, drag onto a kit pad. Scroll for more.`;
+  // while the first wave is being checked, wait rather than reshuffle rows under the cursor
+  if (!shown.length || (inspecting > 0 && !list.querySelector('.lib-row'))) {
+    list.replaceChildren(h('li', { class: 'empty lib-wait' }, !pool.length || inspecting > 0 ? `Listening for the cleanest recordings… ${done.length} checked` : 'No sounds pass the quality filter here. Set Quality to Everything, or drop the pin somewhere busier.'));
+    updateSelBtn(); return;
+  }
+  const old = new Map([...list.querySelectorAll('.lib-row')].map(r => [r.dataset.id, r]));
+  list.replaceChildren(...shown.map(s => old.get(s.id) || libRow(s)));
+  const more = items.length > libShown || pool.some(x => !x.ins && !x.insErr) || poolMore;
+  if (more) { sentinel.textContent = inspecting > 0 ? 'Checking more recordings…' : 'Scroll for more'; list.append(sentinel); }
   updateSelBtn();
 }
 function libRow(s) {
@@ -928,7 +958,24 @@ function libRow(s) {
 }
 
 // ---------------- field recorder ----------------
-let recMics = new Set(), recLen = 30, recResult = null, recBusy = false, recSort = 'bal';
+let recMics = new Set(), recLen = 30, recResult = null, recBusy = false, micScoreFor = -1;
+const micEq = new Map();   // station id -> mean spectral evenness of its recent audio
+// Score each mic on a blend of: closeness to the pin, its balance index, and how even its spectrum is.
+function micScore(o) {
+  const near = 1 - Math.min(1, o.km / Math.max(1, region.radius)), bal = o.st.bal ? o.st.bal.sbi / 100 : 0.35, eq = micEq.get(o.st.id) ?? 0.5;
+  return 0.35 * near + 0.35 * bal + 0.3 * eq;
+}
+function scoreMics() {
+  if (micScoreFor === gen) return;
+  micScoreFor = gen;
+  const g = gen;
+  mapLimit(region.near.filter(o => !micEq.has(o.st.id)), 4, async o => {
+    const nodes = (await B().gql(RECENT, { id: o.st.id })).station?.detections?.nodes || [];
+    const snds = [...new Map(nodes.filter(n => n.soundscape?.url).map(n => [n.soundscape.url, toSnd(n)])).values()].filter(s => !isUltra(s)).slice(0, 2);
+    const r = (await mapLimit(snds, 2, inspect)).filter(x => x && x.label !== 'silent');
+    micEq.set(o.st.id, r.length ? r.reduce((a, x) => a + x.eq, 0) / r.length : 0.3);
+  }).then(() => { if (g === gen && tab === 'rec' && !recBusy) renderRec(); });
+}
 const RECENT = `query($id:ID!){ station(id:$id){ detections(first:8, validSoundscape:true){ nodes{ ${FRAG} } } } }`;
 function previewStation(st, btn, row) {
   return startMon(btn, row, async done => {
@@ -955,7 +1002,8 @@ function previewHydro(hy, btn, row) {
 function renderRec() {
   if (!region) return;
   const el = $('recMics'), { sbiColor, kmTxt } = B();
-  const st = [...region.near].sort(recSort === 'bal' ? (a, b) => (b.st.bal?.sbi ?? -1) - (a.st.bal?.sbi ?? -1) || a.km - b.km : (a, b) => a.km - b.km);
+  scoreMics();
+  const st = [...region.near].sort((a, b) => micScore(b) - micScore(a));
   const row = (id, name, sub, pill, kind, preview) => {
     const on = recMics.has(id);
     const pv = h('button', { class: 'ib play', title: 'Preview this mic', 'aria-label': `Preview ${name}`, 'aria-pressed': 'false' }, '▶');
@@ -974,8 +1022,9 @@ function renderRec() {
   el.replaceChildren(...[
     region.hydros.length ? h('p', { class: 'lh' }, 'Hydrophones · live, records in real time') : null,
     ...region.hydros.map(({ hy, km }) => row('h:' + hy.id, hy.a.name, `${kmTxt(km)} · ${hy.live === false ? 'offline' : 'Orcasound live stream'}`, h('span', { class: 'pill' + (hy.live === false ? ' off' : ' live') }, hy.live === false ? 'off' : 'live'), 'hy', (b, r) => previewHydro(hy, b, r))),
-    h('p', { class: 'lh' }, `Station mics · ${st.length} nearest`),
-    ...st.map(({ st: s, km }) => row('s:' + s.id, s.name, `${kmTxt(km)} away${s.m?.S ? ` · ${s.m.S} species today` : ''}`, s.bal ? h('span', { class: 'pill', style: `background:${sbiColor(s.bal.sbi)}`, title: 'Balance index' }, s.bal.sbi) : h('span', { class: 'pill off', title: 'Not enough data for a balance score' }, '–'), 'st', (b, r) => previewStation(s, b, r))),
+    h('p', { class: 'lh' }, `Station mics · best match first`),
+    ...st.map(o => { const { st: s, km } = o, eq = micEq.get(s.id); return row('s:' + s.id, s.name, `${kmTxt(km)}${s.m?.S ? ` · ${s.m.S} species` : ''}${eq != null ? ` · EQ ${Math.round(eq * 100)}` : ' · EQ …'}`,
+      h('span', { class: 'pill', style: `background:${sbiColor(Math.round(micScore(o) * 100))}`, title: `Match ${Math.round(micScore(o) * 100)}: distance ${kmTxt(km)}, balance ${s.bal?.sbi ?? 'n/a'}, spectral evenness ${eq != null ? Math.round(eq * 100) : 'checking'}` }, Math.round(micScore(o) * 100)), 'st', (b, r) => previewStation(s, b, r)); }),
   ].filter(Boolean));
   const n = recMics.size, hyd = [...recMics].some(x => x.startsWith('h:'));
   $('recSel').textContent = n ? `${n} mic${n > 1 ? 's' : ''} selected${hyd ? ' (live, records in real time)' : n > 1 ? ' · spread across the stereo field' : ''}` : 'Choose up to 4 mics. ▶ previews one.';
@@ -1086,20 +1135,21 @@ function showBed() {
 // ---------------- shell ----------------
 let tab = 'kit', kitFor = -1;
 function showStudioTab(t) {
+  if (t !== tab) { togglePlay(false); stopMon(); $('studio').scrollTop = 0; scrolled = false; quietUntil = performance.now() + 800; }
   tab = t;
   document.querySelectorAll('.st-tab').forEach(b => { const on = b.dataset.t === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
   document.querySelectorAll('.st-pane').forEach(p => { p.hidden = p.id !== 'st-' + t; });
   if (!region) return;
   if (t === 'kit' && kitFor !== gen) { kitFor = gen; buildKit(); }
   if (t === 'kit') requestAnimationFrame(() => { if (pads.length) { renderPadsMeta(); renderEditor(); } });
-  if (t === 'lib') { renderLib(); if (!pool.length) loadPool().then(() => { inspectPool(); renderLib(); }).catch(() => { $('libMsg').textContent = 'Could not load sounds.'; }); else inspectPool(); }
+  if (t === 'lib') { renderLib(); if (!pool.length) loadPool().then(() => { inspectPool(); renderLib(); }).catch(() => { $('libMsg').textContent = 'Could not load sounds.'; }); else if (!pool.some(x => x.ins || x.insQueued)) inspectPool(); }
   if (t === 'rec') renderRec();
 }
 window.addEventListener('biophony:pin', e => {
   togglePlay(false); stopMon();
   setRegion(e.detail);
   document.querySelectorAll('#pinN button').forEach(x => { const on = +x.dataset.n === e.detail.near.length || (+x.dataset.n === 48 && e.detail.near.length > 24); x.classList.toggle('on', on); x.setAttribute('aria-pressed', on); });
-  pads = []; candidates = []; libSel.clear(); recMics.clear(); recResult = null;
+  pads = []; candidates = []; libSel.clear(); libShown = 10; scrolled = false; libCur = null; micScoreFor = -1; recMics.clear(); recResult = null;
   $('recOut').replaceChildren(); $('pads').replaceChildren(); $('editor').replaceChildren(); $('libList').replaceChildren(); $('kitStatus').textContent = e.detail.auto ? `Widened to ${e.detail.near.length} mics within ${B().kmTxt(e.detail.radius)}…` : '';
   $('stEmpty').hidden = true; $('stBody').hidden = false;
   renderSeq();
@@ -1140,13 +1190,11 @@ $('kSwing').addEventListener('input', e => { swing = +e.target.value / 100; $('k
 $('kKit').addEventListener('click', () => exportKit().catch(e => { $('kitStatus').textContent = 'Export failed: ' + e.message; }));
 $('kLoop').addEventListener('click', () => exportLoop().catch(e => { $('kitStatus').textContent = 'Export failed: ' + e.message; }));
 $('kMidi').addEventListener('click', () => save(midi(pattern, bpm), `biophony-pattern_${bpm}bpm.mid`));
-$('libSearch').addEventListener('input', e => { libQuery = e.target.value.trim().toLowerCase(); renderLib(); });
-$('libSort').addEventListener('change', e => { libSort = e.target.value; renderLib(); });
-$('libQ').addEventListener('change', e => { libQ = +e.target.value; renderLib(); });
+$('libSearch').addEventListener('input', e => { libQuery = e.target.value.trim().toLowerCase(); libShown = 10; renderLib(); });
+$('libSort').addEventListener('change', e => { libSort = e.target.value; libShown = 10; renderLib(); });
+$('libQ').addEventListener('change', e => { libQ = +e.target.value; libShown = 10; renderLib(); });
 $('libCut').addEventListener('change', e => { libCut = e.target.value; });
 $('libZip').addEventListener('click', () => downloadSel());
-$('libMore').addEventListener('click', async () => { $('libMore').disabled = true; await loadPool(true).catch(() => {}); $('libMore').disabled = false; inspectPool(); renderLib(); });
-$('recSort').addEventListener('change', e => { recSort = e.target.value; renderRec(); });
 document.querySelectorAll('#recLens button').forEach(b => b.addEventListener('click', () => { recLen = +b.dataset.s; document.querySelectorAll('#recLens button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); }));
 $('recGo').addEventListener('click', buildBed);
 document.addEventListener('keydown', e => {
