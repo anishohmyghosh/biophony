@@ -732,6 +732,7 @@ function envSvg(p) {
 }
 function renderEditor() {
   const p = pads[selPad], el = $('editor');
+  if ($('editor').hidden) { $('edToggleL').textContent = `Sound details${p ? ' · ' + p.role.name : ''}`; return; }
   if (!p) { el.replaceChildren(); return; }
   const sr = p.buf.sampleRate, s = p.snd, t = p.ins.tonal;
   const cv = h('canvas', { class: 'src-wave', title: 'Drag to move the slice start. It snaps to transients (the white ticks); hold alt for free placement.' });
@@ -1186,6 +1187,15 @@ $('stSite').addEventListener('click', () => { const s = region?.near[0]?.st; if 
 document.querySelectorAll('#pinN button').forEach(b => b.addEventListener('click', () => { document.querySelectorAll('#pinN button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); }); B().repin(+b.dataset.n); }));
 document.querySelectorAll('.st-tab').forEach(b => b.addEventListener('click', () => showStudioTab(b.dataset.t)));
 $('kPlay').addEventListener('click', () => togglePlay());
+// Sound details (waveform, envelope, knobs) fold away under the pads; remembered per browser.
+function setDetails(open) {
+  $('editor').hidden = !open; $('edToggle').setAttribute('aria-expanded', open);
+  $('edToggleL').textContent = open ? 'Hide details' : `Sound details${pads[selPad] ? ' · ' + pads[selPad].role.name : ''}`;
+  try { localStorage.setItem('biophony-details', open ? '1' : '0'); } catch { }
+  if (open) requestAnimationFrame(renderEditor);
+}
+$('edToggle').addEventListener('click', () => setDetails($('editor').hidden));
+try { if (localStorage.getItem('biophony-details') === '1') setDetails(true); } catch { }
 $('kGen').addEventListener('click', () => generate($('kStyle').value));
 $('kStyle').addEventListener('change', () => generate($('kStyle').value));
 $('kMut').addEventListener('click', mutate);

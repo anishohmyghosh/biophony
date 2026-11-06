@@ -490,3 +490,9 @@ body.dragging .pad { border-style: dashed; }
 @media (max-width: 640px) { .st-hello { font-size: 1.8rem; } }
 .st-top { align-items: center; } .st-region:empty, .st-region:has(#stRegionSub:empty) { display: none; }
 .pulse-m { width: 0; height: 0; pointer-events: none; } .pulse-m .pulse { position: absolute; left: -7px; top: -7px; }
+.ed-toggle { justify-self: center; display: inline-flex; align-items: center; gap: 8px; margin: -2px 0; padding: 5px 14px 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg2); color: var(--muted); font-size: .76rem; }
+.ed-toggle:hover { color: var(--ink); border-color: #34504f; }
+.ed-arrow { display: inline-block; transition: transform .18s; font-size: .8rem; }
+.ed-toggle[aria-expanded="true"] .ed-arrow { transform: rotate(180deg); }
+.ed-toggle[aria-expanded="true"] { color: var(--ink); }
+.ed-arrow { width: 12px; height: 12px; }
