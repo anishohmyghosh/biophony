@@ -1,0 +1,15 @@
+{
+  "name": "biophony",
+  "version": "0.2.0",
+  "private": true,
+  "description": "A sound discovery globe: drop a pin, hear the nearest acoustic monitors, build kits, sound packs and ambience from them.",
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8791",
+    "lint": "eslint js"
+  },
+  "devDependencies": {
+    "eslint": "9.15.0",
+    "globals": "15.12.0"
+  }
+}
