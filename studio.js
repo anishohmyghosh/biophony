@@ -61,6 +61,10 @@ function playBuffer(buf, { rate = 1, gain = 1, from = 0, dur, onEnd } = {}) {
   return { stop: () => { s.onended = null; try { s.stop(); } catch { } } };
 }
 window.addEventListener('biophony:mainplay', () => { stopMon(); togglePlay(false); });
+window.addEventListener('biophony:ratelimit', e => {
+  const tick = () => { const s = Math.ceil((e.detail.until - Date.now()) / 1000); const el = $(tab === 'lib' ? 'libMsg' : tab === 'rec' ? 'recMsg' : 'kitStatus'); if (s > 0) { el.textContent = `BirdWeather (the free source of these recordings) asked us to slow down. Continuing in ${s} s…`; setTimeout(tick, 1000); } };
+  tick();
+});
 // Safari: create/resume the studio's audio inside the first click, before any fetch can break the gesture.
 ['pointerdown', 'keydown', 'touchend'].forEach(t => document.addEventListener(t, () => { if (!ctx || ctx.state !== 'running') audioCtx(); }, { capture: true, passive: true }));
 
@@ -975,12 +979,17 @@ function scoreMics() {
   if (micScoreFor === gen) return;
   micScoreFor = gen;
   const g = gen;
-  mapLimit(region.near.filter(o => !micEq.has(o.st.id)), 4, async o => {
-    const nodes = (await B().gql(RECENT, { id: o.st.id })).station?.detections?.nodes || [];
-    const snds = [...new Map(nodes.filter(n => n.soundscape?.url).map(n => [n.soundscape.url, toSnd(n)])).values()].filter(s => !isUltra(s)).slice(0, 2);
-    const r = (await mapLimit(snds, 2, inspect)).filter(x => x && x.label !== 'silent');
-    micEq.set(o.st.id, r.length ? r.reduce((a, x) => a + x.eq, 0) / r.length : 0.3);
-  }).then(() => { if (g === gen && tab === 'rec' && !recBusy) renderRec(); });
+  const todo = region.near.filter(o => !micEq.has(o.st.id));
+  (async () => {
+    // one request for all mics (plus whatever the library already fetched), two clips per mic
+    if (!pool.length) await loadPool().catch(() => {});
+    const by = new Map();
+    for (const s of pool) if (!isUltra(s)) { const a = by.get(s.st?.id) || []; if (a.length < 2 && !a.some(x => x.sc.url === s.sc.url)) a.push(s); by.set(s.st?.id, a); }
+    await mapLimit(todo, 4, async o => {
+      const r = (await mapLimit(by.get(o.st.id) || [], 2, inspect)).filter(x => x && x.label !== 'silent');
+      micEq.set(o.st.id, r.length ? r.reduce((a, x) => a + x.eq, 0) / r.length : 0.3);
+    });
+  })().then(() => { if (g === gen && tab === 'rec' && !recBusy) renderRec(); });
 }
 const RECENT = `query($id:ID!){ station(id:$id){ detections(first:8, validSoundscape:true){ nodes{ ${FRAG} } } } }`;
 function previewStation(st, btn, row) {

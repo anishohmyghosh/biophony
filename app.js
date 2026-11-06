@@ -34,11 +34,30 @@ const COLORS = { bird: '#e3b765', bat: '#b59cf0', insect: '#a7d36a', amphibian: 
 const km = (a, b, c, d) => { const r = Math.PI / 180, x = Math.sin((c - a) * r / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin((d - b) * r / 2) ** 2; return 12742 * Math.asin(Math.sqrt(x)); };
 const kmTxt = d => d < 1 ? '<1 km' : d < 10 ? d.toFixed(1) + ' km' : Math.round(d) + ' km';
 
-async function gql(query, variables = {}) {
-  const r = await fetch(BW, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, variables }) });
-  const j = await r.json();
-  if (j.errors) throw new Error(j.errors[0].message);
-  return j.data;
+// BirdWeather is free and rate-limits each network. All requests go through one queue
+// (at most 4 at a time); if it says "retry after N seconds", everything waits and then carries on.
+let gqlActive = 0, pausedUntil = 0;
+const gqlQueue = [];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function gqlNext() { while (gqlActive < 4 && gqlQueue.length) { gqlActive++; gqlQueue.shift()(); } }
+async function gql(query, variables = {}, low = false) {
+  await new Promise(r => { low ? gqlQueue.push(r) : gqlQueue.unshift(r); gqlNext(); });
+  try {
+    for (let attempt = 0; ; attempt++) {
+      if (Date.now() < pausedUntil) await sleep(pausedUntil - Date.now());
+      const r = await fetch(BW, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, variables }) });
+      const j = await r.json().catch(() => ({ errors: [{ message: 'HTTP ' + r.status }] }));
+      const msg = j.errors?.[0]?.message || '';
+      const wait = r.status === 429 || /rate limit/i.test(msg) ? +(msg.match(/(\d+)\s*second/)?.[1] || 30) : 0;
+      if (wait && attempt < 3) {
+        pausedUntil = Math.max(pausedUntil, Date.now() + wait * 1000 + 500);
+        window.dispatchEvent(new CustomEvent('biophony:ratelimit', { detail: { until: pausedUntil } }));
+        continue;
+      }
+      if (j.errors) throw new Error(msg);
+      return j.data;
+    }
+  } finally { gqlActive--; gqlNext(); }
 }
 const getJSON = async url => { const r = await fetch(url); if (!r.ok) throw new Error(r.status + ' ' + url); return r.json(); };
 
@@ -203,7 +222,7 @@ async function loadStations() {
 }
 
 const MQ = `query($ne:InputLocation,$sw:InputLocation,$after:String,$p:InputDuration){ stations(first:500, after:$after, period:$p, ne:$ne, sw:$sw){ pageInfo{hasNextPage endCursor} nodes{ id name continent country state coords{lat lon} topSpecies(limit:100, period:$p){ count species{ classification } } } } }`;
-const CACHE_KEY = 'biophony-metrics-v1', CACHE_MS = 40 * 60e3;
+const CACHE_KEY = 'biophony-metrics-v1', CACHE_MS = 2 * 3600e3;   // scores use 24 h of data, so a 2 h cache is plenty
 let analysed = 0, analysing = false, lastRun = 0;
 function setMetrics(st, top) { st.m = diversity(top.map(x => ({ n: x.count, c: normCls(x.species?.classification) }))); }
 function shards() {
@@ -216,7 +235,7 @@ function shards() {
 async function runShard(sh) {
   let after = null;
   for (let page = 0; page < 20; page++) {
-    const d = await gql(MQ, { ne: sh.ne, sw: sh.sw, after, p: DAY });
+    const d = await gql(MQ, { ne: sh.ne, sw: sh.sw, after, p: DAY }, true);
     for (const n of d.stations.nodes) { const st = addStation(n); if (!st) continue; if (!st.m) analysed++; setMetrics(st, n.topSpecies || []); }
     scheduleRefresh();
     if (!d.stations.pageInfo.hasNextPage) break;
@@ -1000,7 +1019,7 @@ const timers = [];
 function setLive(ok) { $('liveDot').classList.toggle('on', ok); $('liveText').textContent = ok ? 'live' : 'reconnecting…'; }
 function startPolling() {
   stopPolling();
-  timers.push(setInterval(() => pollPulses().then(() => setLive(true)).catch(() => setLive(false)), 8000));
+  timers.push(setInterval(() => pollPulses().then(() => setLive(true)).catch(() => setLive(false)), 20000));
   timers.push(setInterval(() => loadCounts().catch(() => {}), 60000));
   timers.push(setInterval(() => { if (Date.now() - lastRun > CACHE_MS) analyseAll(); }, 60000));
 }
@@ -1018,6 +1037,5 @@ document.addEventListener('visibilitychange', () => {
   pollPulses().then(() => setLive(true)).catch(() => setLive(false));
   startPolling();
   if (loadCache()) scheduleRefresh();
-  else { analyseAll(); scheduleRefresh(); }
-  loadStations().then(scheduleRefresh).catch(() => {});
+  else { analyseAll(); scheduleRefresh(); loadStations().then(scheduleRefresh).catch(() => {}); }
 })();
